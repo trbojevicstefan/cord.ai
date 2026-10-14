@@ -51,3 +51,8 @@ See [operator setup, scope and security](docs/OPERATOR_AND_ONBOARDING.md). `npm 
 ## Discord-style messaging and interaction (v0.4)
 
 Cord now includes persistent emoji reactions, actual reply references and inline edits, pinned message panels, secured local uploads, drag-and-drop attachments, clickable `@member`/`@agent`/`#channel` mentions with keyboard suggestions, role-gated `@everyone`/`@here`, slash commands, typing indicators, unread/mention badges, spoilers, formatted text and message right-click menus in channels, threads and DMs. These improvements sit on top of the existing OPAYA bridge and Cord Operator. See [Conversation UX](docs/DISCORD_EXPERIENCE.md) for API details, permissions, testing and intentionally out-of-scope Discord features.
+
+
+## Notification Center (v0.5)
+
+Cord now has a persistent per-user notification inbox with a header/rail bell, @mentions, replies, DMs, followed threads, subscribed channels, agent failures and approvals. Use Alt+N or click the bell to filter, read, dismiss and jump to the original message. Per-conversation mute and user-level preferences, quiet hours, desktop alerts and notification sounds are supported. Alerts are delivered to authenticated Cord browser tabs, not to closed browsers. See [Notification Center](docs/NOTIFICATIONS.md) for API, privacy, behavior and limitations.

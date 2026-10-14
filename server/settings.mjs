@@ -1,5 +1,8 @@
 import { hashPassword, verifyPassword, now } from './database.mjs';
-const defaults={theme:'dark',density:'comfortable',fontSize:13,enterToSend:true,showTyping:true,desktopNotifications:false,notificationSound:false,onboardingComplete:false};
+const defaults={theme:'dark',density:'comfortable',fontSize:13,enterToSend:true,showTyping:true,desktopNotifications:false,notificationSound:false,onboardingComplete:false,
+  notifyDirectMessages:true,notifyMentions:true,notifyReplies:true,
+  notifyThreadActivity:true,notifyChannelActivity:true,notifyAgentEvents:true,
+  quietHoursStart:'',quietHoursEnd:''};
 const fail=(status,message)=>Object.assign(new Error(message),{status});
 export function createSettings({store,broadcast,audit,requireWorkspace,requireAdmin,canReadTarget,bodyJSON,asJSON,parseCookie,idHash}){
   const {db,get,all,run}=store;
@@ -16,7 +19,11 @@ export function createSettings({store,broadcast,audit,requireWorkspace,requireAd
       if(input.theme!==undefined){if(!['dark','light'].includes(input.theme))throw fail(400,'Unknown theme');next.theme=input.theme;}
       if(input.density!==undefined){if(!['comfortable','compact'].includes(input.density))throw fail(400,'Unknown density');next.density=input.density;}
       if(input.fontSize!==undefined){if(![12,13,14,16,18].includes(Number(input.fontSize)))throw fail(400,'Choose a supported font size');next.fontSize=Number(input.fontSize);}
-      for(const k of ['enterToSend','showTyping','desktopNotifications','notificationSound','onboardingComplete'])if(input[k]!==undefined){if(typeof input[k]!=='boolean')throw fail(400,'Invalid setting');next[k]=input[k];}
+      for(const k of ['enterToSend','showTyping','desktopNotifications','notificationSound','onboardingComplete','notifyDirectMessages','notifyMentions','notifyReplies','notifyThreadActivity','notifyChannelActivity','notifyAgentEvents'])if(input[k]!==undefined){if(typeof input[k]!=='boolean')throw fail(400,'Invalid setting');next[k]=input[k];}
+      for(const k of ['quietHoursStart','quietHoursEnd'])if(input[k]!==undefined){
+        if(typeof input[k]!=='string'||(input[k]!==''&&!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input[k])))throw fail(400,'Quiet hours must be a local HH:MM time');
+        next[k]=input[k];
+      }
       run('INSERT INTO user_settings(user_id,settings) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET settings=excluded.settings',user.id,JSON.stringify(next));
       asJSON(res,200,{ok:true,settings:next});return true;
     }
