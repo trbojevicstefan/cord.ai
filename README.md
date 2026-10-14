@@ -46,3 +46,8 @@ The Operator understands workspace structure, reads public-channel/thread histor
 Provider keys are encrypted under `CORD_MASTER_KEY` and never returned by the API. Preset providers use fixed URLs. Custom remote providers require `CORD_LLM_ALLOWED_HOSTS=example-llm.example` with HTTPS (loopback HTTP only during demo/dev). Provider requests may send permitted channel/thread content, so review the provider's data handling before enabling the feature. API calls can cost tokens.
 
 See [operator setup, scope and security](docs/OPERATOR_AND_ONBOARDING.md). `npm test` includes mock provider tests (no paid tokens).
+
+
+## Discord-style messaging and interaction (v0.4)
+
+Cord now includes persistent emoji reactions, actual reply references and inline edits, pinned message panels, secured local uploads, drag-and-drop attachments, clickable `@member`/`@agent`/`#channel` mentions with keyboard suggestions, role-gated `@everyone`/`@here`, slash commands, typing indicators, unread/mention badges, spoilers, formatted text and message right-click menus in channels, threads and DMs. These improvements sit on top of the existing OPAYA bridge and Cord Operator. See [Conversation UX](docs/DISCORD_EXPERIENCE.md) for API details, permissions, testing and intentionally out-of-scope Discord features.

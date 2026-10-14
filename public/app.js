@@ -1,4 +1,5 @@
 import { icon } from './icons.js';
+import { createDiscordExperience } from './discord-experience.js';
 import { createConnectionViews } from './connections.js';
 import { createOperatorPanel } from './operator.js';
 import { createGuidance } from './guidance.js';
@@ -27,6 +28,7 @@ const category=id=>K().find(x=>x.id===id);
 const dm=id=>D().find(x=>x.id===id);
 const prefs=(type,id)=>data().preferences?.find(x=>x.target_type===type&&x.target_id===id)||{muted:0,favorite:0,notification_level:'all'};
 const admin=()=>['owner','admin'].includes(member(me().id)?.role);
+const discord=createDiscordExperience({api,esc,icon,getState:()=>state,getData:data,getMember:id=>member(id),getAgent:id=>agent(id),getChannel:id=>channel(id),isAdmin:admin,toast,loadMessages,renderMessagesOnly,selectTarget,openModal,onHelp:()=>{if(typeof guidance!=='undefined')guidance.openHelp();else openModal('help')}});
 const operator=createOperatorPanel({api,icon,esc,getData:data,isAdmin:admin,onWorkspaceChanged:()=>loadData({keepScroll:true}),onError:handleError});
 const guidance=createGuidance({api,getData:data,isAdmin:admin,onError:handleError,onAction:action=>{if(action==='operator'){void operator.open();return}const map={channel:'create-channel',thread:'create-thread',agent:'connect-agent',dm:'goto-dm',runs:'open-run-log',invite:'show-invite',settings:'open-settings'};if(map[action])void doAction({dataset:{action:map[action]}},{})}});
 const avatar=(item,size=32,kind='human')=>`<span class="avatar ${kind==='agent'?'avatar-agent':''}" style="--avatar-color:${esc(item?.color||'#5865f2')};width:${size}px;height:${size}px;min-width:${size}px;font-size:${Math.round(size*.34)}px" title="${esc(item?.display_name||item?.name||'User')}">${esc(item?.avatar||item?.display_name?.split(' ').map(s=>s[0]).join('').slice(0,2)||item?.name?.slice(0,2)||'?')}<i class="presence ${esc(item?.status||'online')}"></i></span>`;
@@ -62,15 +64,16 @@ async function loadMessages(){
 }
 function selectTarget(type,id){
   if(type==='dm'){state.dmView=true;put('dmView',true)}else{state.dmView=false;put('dmView',false)}
-  state.selected={type,id};state.screen='chat';state.menu=null;state.profile=null;state.modal=null;state.lastSelection='';put('selected',state.selected);
+  discord.changingTarget();state.selected={type,id};state.screen='chat';state.menu=null;state.profile=null;state.modal=null;state.lastSelection='';put('selected',state.selected);
   loadMessages().then(()=>{render(); markRead(type,id)}).catch(handleError);
 }
-async function markRead(type,id){try{await api('/read',{method:'POST',body:{targetType:type,targetId:id}})}catch{}}
+async function markRead(type,id){try{await api('/read',{method:'POST',body:{targetType:type,targetId:id}});const unread=data().unreads?.[type+':'+id];if(unread){unread.total=0;unread.mentions=0;}const row=document.querySelector('[data-context="'+type+'"][data-id="'+CSS.escape(id)+'"]');row?.querySelectorAll('.discord-unread-dot,.discord-unread-mentions').forEach(el=>el.remove())}catch{}}
 function initEvents(){
   let stream;const connect=()=>{if(!state.data?.workspace)return;stream?.close();stream=new EventSource('/api/events?workspaceId='+encodeURIComponent(state.data.workspace.id));
     let timer; stream.addEventListener('change',()=>{clearTimeout(timer);timer=setTimeout(()=>loadData({keepScroll:true}).catch(handleError),150)});
     stream.addEventListener('agent',ev=>{try{const a=JSON.parse(ev.data),k=a.targetType+':'+a.targetId;state.typing[k]=['queued','running'].includes(a.status)?a.agentId:null;if(a.status==='failed')toast(`Agent run failed: ${a.error||'Unknown error'}`,'error');renderMessagesOnly()}catch{}});
-    stream.addEventListener('progress',ev=>{try{const p=JSON.parse(ev.data),r=data().runs?.find(r=>r.id===p.runId);if(r)r.progress=p.progress;if(state.modal?.kind==='runs')renderOverlays();else if(state.screen==='settings'&&state.selectedSettings==='runs')render();}catch{}});
+    stream.addEventListener('typing',ev=>{try{discord.receiveTyping(JSON.parse(ev.data))}catch{}});
+     stream.addEventListener('progress',ev=>{try{const p=JSON.parse(ev.data),r=data().runs?.find(r=>r.id===p.runId);if(r)r.progress=p.progress;if(state.modal?.kind==='runs')renderOverlays();else if(state.screen==='settings'&&state.selectedSettings==='runs')render();}catch{}});
     stream.onerror=()=>{};
   };connect();return connect;
 }
@@ -87,7 +90,7 @@ function parseMarkdown(text){
     else if(line.trim())out+='<p>'+inline(line)+'</p>';
     else out+='<div class="line-space"></div>';
   }
-  if(list)out+='</ul>';if(code)out+='</code></pre>';return out;
+  if(list)out+='</ul>';if(code)out+='</code></pre>';return discord.enrichMarkdown(out);
 }
 function selectedHeader(){
   const item=current(),type=state.selected.type;if(!item)return '';
@@ -98,7 +101,7 @@ function selectedHeader(){
   const actions=type==='thread'?`${iconButton('bell-off','toggle-mute','Mute thread')} ${iconButton('pin','favorite','Add to Favorites')} ${iconButton('users','toggle-members','Show members')}`:
     type==='channel'?`${iconButton('threads','browse-threads','Browse threads')} ${iconButton('bell','toggle-mute','Mute channel')} ${iconButton('users','toggle-members','Show members')}`:
     `${iconButton('pin','favorite','Pin conversation')} ${iconButton('users','toggle-members','Show profile')}`;
-  return `<header class="room-header"><button class="mobile-menu icon-btn" data-action="mobile-menu" aria-label="Show channels">${icon('menu',20)}</button><div class="room-crumb">${head}</div><div class="room-tools">${actions}<button class="icon-btn header-more" data-action="open-room-menu" title="More options">${icon('more',21)}</button><button class="search-top" data-action="search"><span>Search ${esc(data().workspace?.name||'Cord AI')}</span>${icon('search',17)}</button></div></header>`;
+  return `<header class="room-header"><button class="mobile-menu icon-btn" data-action="mobile-menu" aria-label="Show channels">${icon('menu',20)}</button><div class="room-crumb">${head}</div><div class="room-tools">${actions}${discord.pinnedButton()}<button class="icon-btn header-more" data-action="open-room-menu" title="More options">${icon('more',21)}</button><button class="search-top" data-action="search"><span>Search ${esc(data().workspace?.name||'Cord AI')}</span>${icon('search',17)}</button></div></header>`;
 }
 function serverRail(){
   return `<aside class="server-rail"><div class="rail-stack">
@@ -119,12 +122,12 @@ function threadRows(id){
     .filter(t=>!state.hideMuted||!prefs('thread',t.id).muted)
     .map(t=>{const active=state.selected.type==='thread'&&state.selected.id===t.id;return `<div class="thread-row ${active?'active':''} ${prefs('thread',t.id).muted?'muted':''}" data-context="thread" data-id="${t.id}">
       <span class="tree-stem"></span><button data-action="open-target" data-type="thread" data-id="${t.id}" class="thread-name" title="${esc(t.name)}"><span>${esc(t.name)}</span></button>
-      <div class="row-extras">${t.locked?icon('lock',13):''}${prefs('thread',t.id).favorite?icon('star',13):''}</div></div>`}).join('');
+      ${discord.unreadBadge('thread',t.id)}<div class="row-extras">${t.locked?icon('lock',13):''}${prefs('thread',t.id).favorite?icon('star',13):''}</div></div>`}).join('');
 }
 function channelRow(c){const active=state.selected.type==='channel'&&state.selected.id===c.id;
   if(state.hideMuted&&prefs('channel',c.id).muted)return '';
   return `<div class="channel-group"><div class="channel-row ${active?'active':''} ${prefs('channel',c.id).muted?'muted':''}" data-context="channel" data-id="${c.id}">
-    <button data-action="open-target" data-type="channel" data-id="${c.id}" class="channel-name">${icon('hash',20)}<span>${esc(c.name)}</span></button>
+    <button data-action="open-target" data-type="channel" data-id="${c.id}" class="channel-name">${icon('hash',20)}<span>${esc(c.name)}</span></button>${discord.unreadBadge('channel',c.id)}
     <div class="row-extras"><button data-action="create-thread" data-channel="${c.id}" title="Create thread">${icon('plus',15)}</button><button data-action="channel-settings" data-id="${c.id}" title="Edit channel">${icon('settings',14)}</button></div></div><div class="thread-branch">${threadRows(c.id)}</div></div>`;
 }
 function userPanel(){return `<div class="user-footer">
@@ -168,9 +171,9 @@ function messageBubble(m,i){
   let inner=m.author_type==='system'?`<div class="system-thread-badge">${icon('threads',19)}</div><div class="message-body"><div class="system-text">${esc(name)} ${esc(m.content.split(':')[0])}: <b>${esc(threadRef?.name||'thread')}</b></div>${threadRef?threadPreview(threadRef):''}</div>`:
     `${grouped?'<div class="compact-avatar-time">'+esc(time)+'</div>':avatar(item,40,m.author_type==='agent'?'agent':'human')}<div class="message-body">
        ${grouped?'':`<div class="message-meta"><button data-action="open-profile" data-id="${m.author_id}" data-kind="${m.author_type==='agent'?'agent':'user'}" class="author-name">${esc(name)}</button>${m.author_type==='agent'?'<span class="badge-app">APP</span>':''}<span class="message-time">${esc(time)}</span></div>`}
-       <div class="markdown">${parseMarkdown(m.content)}</div>${threadRef?threadPreview(threadRef):''}
+       <div class="markdown">${discord.messageIntro(m)}${parseMarkdown(m.content)}</div>${discord.messageBottom(m)}${threadRef?threadPreview(threadRef):''}
      </div>`;
-  return `<div class="message ${grouped?'grouped':''} ${m.author_type==='system'?'system-message':''}" data-message-id="${m.id}" ${state.selected.type==='channel'&&m.author_type!=='system'?`data-context="message" data-id="${m.id}"`:''}>${inner}${m.author_type!=='system'?`<div class="message-toolbar">${state.selected.type==='channel'?`<button data-action="thread-message" data-id="${m.id}" title="${threadRef?'Open thread':'Create thread'}" aria-label="${threadRef?'Open thread':'Create thread'}">${icon('threads',17)}</button>`:''}<button data-action="react-message" data-id="${m.id}" title="Add reaction">${icon('smile',17)}</button><button data-action="reply-message" data-id="${m.id}" title="Reply">${icon('message-square',17)}</button><button data-action="copy-message" data-id="${m.id}" title="Copy message">${icon('copy',17)}</button>${m.author_type==='user'&&m.author_id===me().id?`<button data-action="delete-message" data-id="${m.id}" title="Delete message">${icon('trash',17)}</button>`:''}</div>`:''}</div>`;
+  return `<div class="message ${discord.mentionsMe(m)?'discord-mentioned':''} ${grouped?'grouped':''} ${m.author_type==='system'?'system-message':''}" data-message-id="${m.id}" ${state.selected.type==='channel'&&m.author_type!=='system'?`data-context="message" data-id="${m.id}"`:''}>${inner}${m.author_type!=='system'?`<div class="message-toolbar">${state.selected.type==='channel'?`<button data-action="thread-message" data-id="${m.id}" title="${threadRef?'Open thread':'Create thread'}" aria-label="${threadRef?'Open thread':'Create thread'}">${icon('threads',17)}</button>`:''}${discord.toolbar(m)}<button data-action="copy-message" data-id="${m.id}" title="Copy message">${icon('copy',17)}</button>${m.author_type==='user'&&m.author_id===me().id?`<button data-action="delete-message" data-id="${m.id}" title="Delete message">${icon('trash',17)}</button>`:''}</div>`:''}</div>`;
 }
 function threadPreview(t){
   const messages=t?state.messages.filter(m=>m.target_type==='thread'&&m.target_id===t.id):[];
@@ -192,7 +195,7 @@ function messagesPanel(){
   const type=state.selected.type,id=state.selected.id,key=type+':'+id,t=thread(id),disable=type==='thread' && (t?.archived||(t?.locked&&!admin()&&t.author_id!==me().id));
   const typingAgent=agent(state.typing[key]);
   return `<div class="chat-scroll" id="chat-scroll"><div class="chat-content">${intro()}${state.messages.length?`<div class="date-divider"><span>${esc(prettyDate(state.messages[0].created_at))}</span></div>`:''}${state.messages.map(messageBubble).join('')}${typingAgent&&data().settings?.showTyping!==false?`<div class="typing-indicator"><span class="typing-dots"><i></i><i></i><i></i></span> ${esc(typingAgent.name)} is thinking…</div>`:''}</div></div>
-  ${connections.approvals((data().approvals||[]).filter(p=>p.target_type===type&&p.target_id===id))}<div class="composer-holder">${disable?`<div class="composer-disabled">${icon('lock',18)} This thread is ${t.archived?'closed':'locked'} · Ask a moderator to reopen it</div>`:`<form class="composer" id="composer" data-form="message"><button class="composer-add" type="button" data-action="composer-add" title="Add attachment or create thread">${icon('plus',22)}</button><textarea aria-label="Message" id="message-input" placeholder="Message ${type==='thread'?esc(t?.name):type==='channel'?'#'+esc(channel(id)?.name):'@'+esc(targetTitle())}" rows="1">${esc(state.drafts[key]||'')}</textarea><div class="composer-tools"><button type="button" class="composer-tool" data-action="insert-emoji" title="Emoji">${icon('smile',20)}</button><button type="button" class="composer-tool" data-action="insert-mention" title="Mention agent">${icon('bot',20)}</button><button type="submit" class="composer-send" title="Send message">${icon('send',18)}</button></div></form>`}<div class="composer-hint">${type==='thread'?`${esc(agent(t?.agent_id)?.name||'No agent assigned')} · ${esc(t?.agent_mode||'mentions')} replies · `:''}<b>${data().settings?.enterToSend===false?'Ctrl+Enter':'Enter'}</b> to send · <b>Shift+Enter</b> for a new line</div></div>`;
+  ${connections.approvals((data().approvals||[]).filter(p=>p.target_type===type&&p.target_id===id))}<div class="composer-holder">${discord.composerActions()}${discord.composerHeader()}${disable?`<div class="composer-disabled">${icon('lock',18)} This thread is ${t.archived?'closed':'locked'} · Ask a moderator to reopen it</div>`:`<form class="composer" id="composer" data-form="message"><button class="composer-add" type="button" data-action="discord-plus" title="Upload file, start thread or run command">${icon('plus',22)}</button><textarea aria-label="Message" id="message-input" placeholder="Message ${type==='thread'?esc(t?.name):type==='channel'?'#'+esc(channel(id)?.name):'@'+esc(targetTitle())}" rows="1">${esc(state.drafts[key]||'')}</textarea><div class="composer-tools">${discord.composerIcons()}<button type="submit" class="composer-send" title="Send message">${icon('send',18)}</button></div></form>`}<div class="composer-hint">${type==='thread'?`${esc(agent(t?.agent_id)?.name||'No agent assigned')} · ${esc(t?.agent_mode||'mentions')} replies · `:''}<b>${data().settings?.enterToSend===false?'Ctrl+Enter':'Enter'}</b> to send · <b>Shift+Enter</b> new line · <b>@</b> mention · <b>/</b> commands</div>${discord.typingMarkup()}</div>`;
 }
 function chatShell(){return `<div class="app-shell">
   <div class="window-bar"><div class="window-left">${icon('arrow',14)} ${icon('chevron',14)}</div><div class="window-center"><span class="window-brand">C</span><span>${esc(data().workspace?.name||'Cord AI')}</span></div><div class="window-right"><span class="secure-dot"></span> Team & Agents</div></div>
@@ -298,7 +301,7 @@ function contextBody(){const menu=state.menu;if(!menu)return '';const {kind,id}=
   if(kind==='message'){
     const m=state.messages.find(m=>m.id===id);if(!m)return '';
     let meta;try{meta=JSON.parse(m.metadata||'{}')}catch{meta={}}
-    return menuItem(thread(meta.thread_ref)?'Open Thread':'Create Thread','thread-message',{ico:'threads',id})+menuDivider()+menuItem('Reply','reply-message',{ico:'message-square',id})+menuItem('Copy Message','copy-message',{ico:'copy',id});
+    return (state.selected.type==='channel'?menuItem(thread(meta.thread_ref)?'Open Thread':'Create Thread','thread-message',{ico:'threads',id})+menuDivider():'')+discord.contextMenu(m,menuItem,menuDivider)+(m.author_type==='user'&&m.author_id===me().id?menuDivider()+menuItem('Delete Message','delete-message',{ico:'trash',id,danger:true}):'');
   }
   if(kind==='thread'){
     const t=thread(id);if(!t)return '';
@@ -353,11 +356,12 @@ function render({keepScroll=false}={}){
   app.innerHTML=(state.screen==='edit-thread'?threadEditor():state.screen==='settings'?settingsView():chatShell())+'<div id="overlays"></div>';
   renderOverlays(savedForm);const scroller=document.querySelector('#chat-scroll');if(scroller){if(changed||oldBottom||!keepScroll)scroller.scrollTop=scroller.scrollHeight;else scroller.scrollTop=oldTop}
   if(state.modal?.kind==='create-thread')requestAnimationFrame(()=>app.querySelector('.modal [autofocus]')?.focus());
+  discord.afterRender();
   guidance.afterRender();
 }
 function renderMessagesOnly(){if(state.screen!=='chat')return;const old=document.querySelector('.conversation-area'),scroll=document.querySelector('#chat-scroll');if(!old)return;
  const wasBottom=scroll?scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<100:true;const top=scroll?.scrollTop||0;
- old.innerHTML=messagesPanel()+rightPanel();const next=document.querySelector('#chat-scroll');if(next)next.scrollTop=wasBottom?next.scrollHeight:top;
+ old.innerHTML=messagesPanel()+rightPanel();discord.afterRender();const next=document.querySelector('#chat-scroll');if(next)next.scrollTop=wasBottom?next.scrollHeight:top;
 }
 function menuOpen(kind,id,event){state.menu={kind,id,x:event.clientX,y:event.clientY};state.profile=null;state.modal=null;renderOverlays()}
 function openModal(kind,extra={}){state.modal={kind,...extra};state.menu=null;state.profile=null;state.searchOpen=false;renderOverlays();requestAnimationFrame(()=>app.querySelector('.modal [autofocus]')?.focus())}
@@ -369,7 +373,7 @@ function editThread(id){state.selected={type:'thread',id};state.screen='edit-thr
 function openSearch(){state.searchOpen=true;state.menu=null;state.modal=null;state.profile=null;state.searchResults=[];state.searchQuery='';renderOverlays();requestAnimationFrame(()=>document.querySelector('#global-search')?.focus())}
 async function updatePref(type,id,patch){const existing=prefs(type,id);await api('/preferences',{method:'POST',body:{targetType:type,targetId:id,...patch}});state.menu=null;await loadData({keepScroll:true});}
 async function doAction(button,event){const action=button.dataset.action,id=button.dataset.id,type=button.dataset.type;
- try{switch(action){
+ try{if(await discord.handleAction(action,button,event))return;switch(action){
   case 'close-menu':state.menu=null;renderOverlays();break;
   case 'dismiss-toast':state.toast=null;renderOverlays();break;
   case 'dismiss-modal':state.modal=null;renderOverlays();break;
@@ -504,10 +508,11 @@ async function submitForm(form,event){event.preventDefault();const kind=form.dat
   }else if(kind==='password'){
     await api('/account/password',{method:'POST',body:values});state.modal=null;renderOverlays();toast('Password changed; other sessions signed out');
   }else if(kind==='message'){
-    const text=String(form.querySelector('textarea')?.value||'').trim();if(!text)return;
+    const text=String(form.querySelector('textarea')?.value||'').trim();
     const selected={...state.selected},key=selected.type+':'+selected.id;
-    await api('/messages',{method:'POST',body:{targetType:selected.type,targetId:selected.id,content:text}});
-    state.drafts[key]='';await loadMessages();renderMessagesOnly();const sc=document.querySelector('#chat-scroll');if(sc)sc.scrollTop=sc.scrollHeight;
+    const prepared=await discord.beforeSend(text);if(prepared.handled){state.drafts[key]='';discord.afterSend();renderMessagesOnly();return;}
+    await api('/messages',{method:'POST',body:{targetType:selected.type,targetId:selected.id,...prepared.body}});
+    discord.afterSend();state.drafts[key]='';await loadMessages();renderMessagesOnly();const sc=document.querySelector('#chat-scroll');if(sc)sc.scrollTop=sc.scrollHeight;
   }else if(kind==='create-category'){
     await api('/categories',{method:'POST',body:{workspaceId:data().workspace.id,name:values.name}});state.modal=null;await loadData();toast('Category created');
   }else if(kind==='create-channel'){
@@ -577,8 +582,8 @@ async function start(){
   let r;try{r=await api('/me')}catch(err){
     try{await api('/auth/demo',{method:'POST',body:{}});r=await api('/me')}catch{loginScreen();return}
   }
-  const route=new URLSearchParams(location.search);if(route.get('view')&&route.get('id')){state.selected={type:route.get('view'),id:route.get('id')};state.dmView=route.get('view')==='dm';history.replaceState(null,'','/')}
-  await loadData();onRefresh=initEvents();if(current())markRead(state.selected.type,state.selected.id);
+  const route=new URLSearchParams(location.search);const deepMessage=route.get('message');if(route.get('view')&&route.get('id')){state.selected={type:route.get('view'),id:route.get('id')};state.dmView=route.get('view')==='dm';history.replaceState(null,'','/')}
+  await loadData();onRefresh=initEvents();if(current())markRead(state.selected.type,state.selected.id);if(deepMessage)requestAnimationFrame(()=>discord.jumpToMessage(deepMessage));
  }catch(err){console.error(err);app.innerHTML=`<div class="error-start"><h1>Couldn't load Cord AI</h1><p>${esc(err.message)}</p><button onclick="location.reload()">Retry</button></div>`}
 }
 setInterval(()=>{

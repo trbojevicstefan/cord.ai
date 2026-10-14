@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve, extname, join, dirname, relative, isAbsolute, sep } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { createDatabase, hashPassword, verifyPassword, uid, now } from './database.mjs';
+import { createSocial } from './social.mjs';
 import { encryptSecret, assertEndpoint, invokeAgent } from './agents.mjs';
 import { createBridge } from './bridge.mjs';
 import { createSettings } from './settings.mjs';
@@ -77,6 +78,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
   // Generic messages cannot have foreign keys to three different target tables;
   // remove dependent events/read state explicitly when a conversation is deleted.
   function purgeConversation(type,id){
+    social.purgeConversation(type,id);
     run('DELETE FROM runs WHERE target_type=? AND target_id=?',type,id);
     run('DELETE FROM messages WHERE target_type=? AND target_id=?',type,id);
     run('DELETE FROM reads WHERE target_type=? AND target_id=?',type,id);
@@ -86,6 +88,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
   const bridge=createBridge({store,broadcast,recordMessage,audit,requireWorkspace,requireAdmin,canReadTarget,bodyJSON,asJSON});
   const settings=createSettings({store,broadcast,audit,requireWorkspace,requireAdmin,canReadTarget,bodyJSON,asJSON,sessionUser,parseCookie,idHash});
   const operator=createOperator({store,broadcast,audit,requireWorkspace,requireAdmin,bodyJSON,asJSON,recordMessage});
+  const social=createSocial({store,canReadTarget,targetWorkspace,requireWorkspace,requireAdmin,recordMessage,broadcast,audit,bodyJSON,asJSON,databasePath});
   function agentMatches(agent,text){return text.toLowerCase().includes('@'+agent.name.toLowerCase())||text.toLowerCase().includes(`<@${agent.id.toLowerCase()}>`)}
   async function queueAgent(source, workspaceId, agent) {
     if(agent.type==='bridge'){const history=all('SELECT * FROM messages WHERE target_type=? AND target_id=? AND rowid<=(SELECT rowid FROM messages WHERE id=?) AND author_type<>? ORDER BY rowid DESC LIMIT 24',source.target_type,source.target_id,source.id,'system').reverse();return bridge.enqueue(source,agent,history);}
@@ -167,6 +170,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     }
     const user=sessionUser(req);
     if(!user)throw failure(401,'Please sign in');
+    if(await social.api(req,res,url,user))return;
     if(await bridge.api(req,res,url,user)||await settings.api(req,res,url,user)||await operator.api(req,res,url,user))return;
     if(pathname==='/api/auth/logout'&&req.method==='POST'){clearSession(req,res);return asJSON(res,200,{ok:true})}
     if(pathname==='/api/me'&&req.method==='GET')return asJSON(res,200,{ok:true,user,demo});
@@ -180,7 +184,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
       const preferences=all('SELECT * FROM preferences WHERE user_id=?',user.id);
       const reads=all('SELECT * FROM reads WHERE user_id=?',user.id);
       const runs=all('SELECT r.id,r.agent_id,r.target_type,r.target_id,r.status,r.error,r.created_at,r.finished_at,j.progress FROM runs r LEFT JOIN bridge_jobs j ON j.id=r.id WHERE r.workspace_id=? ORDER BY r.rowid DESC LIMIT 50',ws.id).filter(r=>canReadTarget(user.id,r.target_type,r.target_id));
-      return asJSON(res,200,{ok:true,user,workspace:ws,categories,channels,threads,members,agents,dms,preferences,reads,runs,demo,settings:settings.view(user.id),workspaces:all('SELECT w.* FROM workspaces w JOIN memberships m ON m.workspace_id=w.id WHERE m.user_id=?',user.id),approvals:bridge.approvals(user,ws.id)});
+      return asJSON(res,200,{ok:true,user,workspace:ws,categories,channels,threads,members,agents,dms,preferences,reads,runs,unreads:social.unreadSummary(user.id,ws.id),demo,settings:settings.view(user.id),workspaces:all('SELECT w.* FROM workspaces w JOIN memberships m ON m.workspace_id=w.id WHERE m.user_id=?',user.id),approvals:bridge.approvals(user,ws.id)});
     }
     if(pathname==='/api/events'&&req.method==='GET'){
       const ws=requireWorkspace(user.id,url.searchParams.get('workspaceId'));
@@ -193,11 +197,12 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     if(pathname==='/api/messages'&&req.method==='GET'){
       const type=url.searchParams.get('type'),id=url.searchParams.get('id');targetWorkspace(user.id,type,id);
       const messages=all('SELECT * FROM (SELECT * FROM messages WHERE target_type=? AND target_id=? ORDER BY created_at DESC,id DESC LIMIT 150) ORDER BY created_at,id',type,id);
-      return asJSON(res,200,{ok:true,messages});
+      return asJSON(res,200,{ok:true,messages:social.decorate(messages,user.id)});
     }
     if(pathname==='/api/messages'&&req.method==='POST'){
       const input=await bodyJSON(req);const type=cut(input.targetType,20),id=cut(input.targetId,100),content=cut(input.content,24000);
-      if(!content)throw failure(400,'Message cannot be empty');const target=targetWorkspace(user.id,type,id);
+      const target=targetWorkspace(user.id,type,id);
+      const prepared=social.prepareMessage(user.id,target,type,id,input);
       if(type==='thread'){
         if(target.archived)throw failure(403,'This thread is closed');
         if(target.locked&&!isAdmin(membership(user.id,target.workspace_id))&&target.author_id!==user.id)throw failure(403,'This thread is locked');
@@ -207,7 +212,8 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
         }
         run('INSERT OR IGNORE INTO thread_members(thread_id,user_id) VALUES(?,?)',id,user.id);
       }
-      const message=recordMessage(target.workspace_id,type,id,'user',user.id,content);
+      const message=recordMessage(target.workspace_id,type,id,'user',user.id,prepared.content,prepared.metadata);
+      social.attachMessage(message,prepared);
       audit(user.id,target.workspace_id,'message.create',type,id);
       routeAgents(message);
       return asJSON(res,201,{ok:true,message});
@@ -217,7 +223,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
       const message=get('SELECT * FROM messages WHERE id=?',delMessage[1]);if(!message)throw failure(404,'Message not found');
       targetWorkspace(user.id,message.target_type,message.target_id);
       if(message.author_id!==user.id&&!isAdmin(membership(user.id,message.workspace_id)))throw failure(403,'Cannot delete another member’s message');
-      run('DELETE FROM messages WHERE id=?',message.id);audit(user.id,message.workspace_id,'message.delete',message.target_type,message.target_id);broadcast(message.workspace_id,'change',{scope:message.target_type,id:message.target_id},message.target_type==='dm'?message.target_id:null);return asJSON(res,200,{ok:true});
+      social.purgeMessage(message.id);run('DELETE FROM messages WHERE id=?',message.id);audit(user.id,message.workspace_id,'message.delete',message.target_type,message.target_id);broadcast(message.workspace_id,'change',{scope:message.target_type,id:message.target_id},message.target_type==='dm'?message.target_id:null);return asJSON(res,200,{ok:true});
     }
     if(pathname==='/api/search'&&req.method==='GET'){
       const ws=requireWorkspace(user.id,url.searchParams.get('workspaceId'));const q=cut(url.searchParams.get('q'),80);
