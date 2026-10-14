@@ -129,6 +129,27 @@ test('agent creation, encrypted key and signed OPAYA bridge request',async()=>wi
   } finally {await new Promise(resolve=>bridge.close(resolve))}
 }));
 
+test('branch a channel message into a thread while preserving its author and channel link',async()=>withFixture(async f=>{
+  const ws=await login(f);
+  const sent=await post(f,'/api/messages',{targetType:'channel',targetId:'channel-chat',content:'Discuss the launch plan'});
+  assert.equal(sent.status,201);
+  const source=(await f.api('/api/messages?type=channel&id=channel-chat')).messages.find(m=>m.content==='Discuss the launch plan');
+  const other=await post(f,'/api/channels',{workspaceId:ws,name:'other-channel'});
+  assert.equal((await post(f,'/api/threads',{channelId:other.id,name:'Wrong channel',sourceMessageId:source.id})).status,400);
+  const created=await post(f,'/api/threads',{channelId:'channel-chat',name:'Launch plan',sourceMessageId:source.id,firstMessage:'Let us start here'});
+  assert.equal(created.status,201);
+  const messages=(await f.api(`/api/messages?type=thread&id=${created.id}`)).messages;
+  assert.equal(messages.length,2);
+  const copied=messages.find(m=>JSON.parse(m.metadata).source_message_id===source.id);
+  assert.equal(copied.content,source.content);
+  assert.equal(copied.author_id,source.author_id);
+  assert.equal(copied.author_type,source.author_type);
+  const original=(await f.api('/api/messages?type=channel&id=channel-chat')).messages.find(m=>m.id===source.id);
+  assert.equal(original.content,source.content);
+  assert.equal(JSON.parse(original.metadata).thread_ref,created.id);
+  assert.equal((await post(f,'/api/threads',{channelId:'channel-chat',name:'Duplicate',sourceMessageId:source.id})).status,409);
+}));
+
 test('CSRF origin gate and forbidden static traversal',async()=>withFixture(async f=>{
   await login(f);
   assert.equal((await f.api('/api/profile',{method:'PATCH',body:{displayName:'Evil'},headers:{origin:'https://evil.example'}})).status,403);

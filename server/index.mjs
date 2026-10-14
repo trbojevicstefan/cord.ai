@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolve, extname, join, dirname, relative, isAbsolute } from 'node:path';
+import { resolve, extname, join, dirname, relative, isAbsolute, sep } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { createDatabase, hashPassword, verifyPassword, uid, now } from './database.mjs';
 import { encryptSecret, assertEndpoint, invokeAgent } from './agents.mjs';
@@ -123,8 +123,8 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     if(!pathname.startsWith('/api/')){
       if(req.method!=='GET'&&req.method!=='HEAD')throw failure(405,'Method not allowed');
       const name=pathname==='/'?'index.html':decodeURIComponent(pathname.slice(1));
-      const file=resolve(PUBLIC,name);if(file!==PUBLIC&&!file.startsWith(PUBLIC+'/'))throw failure(403,'Forbidden');
-      try{const info=await stat(file);if(!info.isFile())throw new Error('Not a file');const content=await readFile(file);res.writeHead(200,{'content-type':MIME[extname(file)]||'application/octet-stream','cache-control':'no-cache','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'"});return res.end(req.method==='HEAD'?undefined:content)}catch{throw failure(404,'Page not found')}
+      const file=resolve(PUBLIC,name),publicRelative=relative(PUBLIC,file);if(publicRelative==='..'||publicRelative.startsWith('..'+sep)||isAbsolute(publicRelative))throw failure(403,'Forbidden');
+      try{const info=await stat(file);if(!info.isFile())throw new Error('Not a file');const content=await readFile(file);res.writeHead(200,{'content-type':MIME[extname(file)]||'application/octet-stream','cache-control':'no-cache','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'"});return res.end(req.method==='HEAD'?undefined:content)}catch{throw failure(404,'Page not found')}
     }
     if(req.method!=='GET' && req.method!=='HEAD'){
       const origin=req.headers.origin;
@@ -240,8 +240,16 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     if(pathname==='/api/threads'&&req.method==='POST'){
       const input=await bodyJSON(req);const channel=targetWorkspace(user.id,'channel',cut(input.channelId,100));const name=cut(input.name,120);if(name.length<2)throw failure(400,'Thread name must have at least 2 characters');
       const agent=input.agentId?get('SELECT id FROM agents WHERE id=? AND workspace_id=?',input.agentId,channel.workspace_id):null;if(input.agentId&&!agent)throw failure(400,'Unknown agent');
+      const source=input.sourceMessageId?get('SELECT * FROM messages WHERE id=? AND workspace_id=? AND target_type=? AND target_id=?',cut(input.sourceMessageId,100),channel.workspace_id,'channel',channel.id):null;
+      if(input.sourceMessageId&&(!source||source.author_type==='system'))throw failure(400,'Choose a message from this channel');
+      const sourceMeta=source?JSON.parse(source.metadata||'{}'):{};
+      if(sourceMeta.thread_ref&&get('SELECT id FROM threads WHERE id=?',sourceMeta.thread_ref))throw failure(409,'This message already has a thread');
       const id=uid(),date=now();run('INSERT INTO threads(id,workspace_id,channel_id,author_id,name,created_at,updated_at,agent_id,agent_mode) VALUES(?,?,?,?,?,?,?,?,?)',id,channel.workspace_id,channel.id,user.id,name,date,date,agent?.id||null,['auto','mentions','off'].includes(input.agentMode)?input.agentMode:'mentions');
       run('INSERT INTO thread_members(thread_id,user_id) VALUES(?,?)',id,user.id);
+      if(source){
+        recordMessage(channel.workspace_id,'thread',id,source.author_type,source.author_id,source.content,{source_message_id:source.id,source_channel_id:channel.id});
+        run('UPDATE messages SET metadata=? WHERE id=?',JSON.stringify({...sourceMeta,thread_ref:id}),source.id);
+      }
       recordMessage(channel.workspace_id,'channel',channel.id,'system',user.id,`started a thread: ${name}`,{thread_ref:id});
       if(cut(input.firstMessage,24000))recordMessage(channel.workspace_id,'thread',id,'user',user.id,cut(input.firstMessage,24000));
       audit(user.id,channel.workspace_id,'thread.create','thread',id);broadcast(channel.workspace_id);return asJSON(res,201,{ok:true,id});
