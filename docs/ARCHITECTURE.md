@@ -1,4 +1,4 @@
-# Cord AI MVP architecture
+# Cord AI architecture
 
 ## Collaboration model
 
@@ -41,13 +41,13 @@ Passwords use salted `scrypt` hashes. Sessions are random 256-bit tokens; only S
 5. Agent reply is inserted as `author_type=agent`; **agent messages never invoke other agents**, preventing runaway loops.
 6. Run status (`running`, `completed`, `failed`) is recorded and can be inspected via UI and `/api/runs`.
 
-This is a synchronous, single-server MVP. Production needs queue, idempotency keys, stable per-provider sessions, backpressure, cancellation, token budgets, an adapter capability registry and tighter per-thread ACL before large teams.
+Legacy outbound connectors are synchronous. Paired agents use a durable queue, device leases, idempotent replies, cancellation, scoped sessions and tool approvals. This remains a single-server application; large-team operation needs backpressure, token budgets, channel ACLs and load testing.
 
 ## MVP and safety boundaries
 
-- No connector can execute arbitrary tools through Cord. A connector only returns a response; there is no privileged action API. Future MCP tools must have explicit per-tool workspace ACL, approval steps, run audit and revoke semantics.
+- Paired local runtimes may execute their own tools with their existing local permissions. Cord supplies conversation jobs, not an arbitrary shell endpoint. Codex/ACP approval requests require an authorized workspace admin; native OPAYA retains its own approvals. Claude uses its headless permission policy. Agent access can be revoked and runs cancelled.
 - URL origin and HTTPS restrictions in `server/agents.mjs` are defense-in-depth against arbitrary external connector requests; production deployments need DNS rebinding protections, private-network filtering after resolution, network egress policy, proxy configuration and stricter allowlisting.
-- SSE state updates are push invalidations, not a durable event bus. A restart keeps SQLite history but not active agent runs.
+- SSE updates are push invalidations. Paired jobs persist across restarts; interrupted execution leases fail without automatic replay.
 - SQLite serves one instance; Redis/PostgreSQL should replace parts of it for horizontal scaling.
 - Multi-workspace UI uses the currently selected/first workspace; membership DB model allows more than one but switching is not exposed in MVP.
 - User profile and notification settings are UX foundations, not a full notification service.

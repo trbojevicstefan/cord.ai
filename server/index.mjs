@@ -1,11 +1,14 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, extname, join, dirname, relative, isAbsolute, sep } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { createDatabase, hashPassword, verifyPassword, uid, now } from './database.mjs';
 import { encryptSecret, assertEndpoint, invokeAgent } from './agents.mjs';
+import { createBridge } from './bridge.mjs';
+import { createSettings } from './settings.mjs';
+import { bridgeDownload } from './downloads.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC = join(ROOT, 'public');
@@ -79,8 +82,11 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     run('DELETE FROM preferences WHERE target_type=? AND target_id=?',type,id);
   }
   function prefs(userId,type,id){return get('SELECT * FROM preferences WHERE user_id=? AND target_type=? AND target_id=?',userId,type,id)||{muted:0,favorite:0,notification_level:'all'}}
+  const bridge=createBridge({store,broadcast,recordMessage,audit,requireWorkspace,requireAdmin,canReadTarget,bodyJSON,asJSON});
+  const settings=createSettings({store,broadcast,audit,requireWorkspace,requireAdmin,canReadTarget,bodyJSON,asJSON,sessionUser,parseCookie,idHash});
   function agentMatches(agent,text){return text.toLowerCase().includes('@'+agent.name.toLowerCase())||text.toLowerCase().includes(`<@${agent.id.toLowerCase()}>`)}
   async function queueAgent(source, workspaceId, agent) {
+    if(agent.type==='bridge'){const history=all('SELECT * FROM messages WHERE target_type=? AND target_id=? AND rowid<=(SELECT rowid FROM messages WHERE id=?) AND author_type<>? ORDER BY rowid DESC LIMIT 24',source.target_type,source.target_id,source.id,'system').reverse();return bridge.enqueue(source,agent,history);}
     const key=`${agent.id}:${source.target_type}:${source.target_id}`;
     const runId=uid();
     if(pendingAgents.has(key))return;
@@ -119,6 +125,8 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
 
   async function route(req,res){
     const url=new URL(req.url,'http://localhost');const pathname=url.pathname;
+    if(await bridgeDownload(req,res,url,ROOT))return;
+    if(pathname==='/api/auth/config'&&req.method==='GET')return asJSON(res,200,{ok:true,setupRequired:!get('SELECT id FROM users LIMIT 1'),demo});
     if(pathname==='/api/health')return asJSON(res,200,{ok:true,service:'cord-ai',mode:demo?'demo':'production'});
     if(!pathname.startsWith('/api/')){
       if(req.method!=='GET'&&req.method!=='HEAD')throw failure(405,'Method not allowed');
@@ -134,6 +142,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
       }
       const ip=req.socket.remoteAddress||'unknown';const mark=throttles.get(ip)||{n:0,until:0};if(mark.until<Date.now()){mark.n=0;mark.until=Date.now()+10_000}if(++mark.n>120)throw failure(429,'Too many requests');throttles.set(ip,mark);
     }
+    if(await bridge.worker(req,res,url))return;
     if(pathname==='/api/auth/demo'&&req.method==='POST'){
       if(!demo)throw failure(404,'Demo login is disabled');const user=get('SELECT * FROM users WHERE id=?','user-stefan');if(!user)throw failure(404,'Demo seed unavailable');openSession(res,user.id);return asJSON(res,200,{ok:true,user:{id:user.id,display_name:user.display_name,username:user.username}});
     }
@@ -156,19 +165,20 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     }
     const user=sessionUser(req);
     if(!user)throw failure(401,'Please sign in');
+    if(await bridge.api(req,res,url,user)||await settings.api(req,res,url,user))return;
     if(pathname==='/api/auth/logout'&&req.method==='POST'){clearSession(req,res);return asJSON(res,200,{ok:true})}
     if(pathname==='/api/me'&&req.method==='GET')return asJSON(res,200,{ok:true,user,demo});
     if(pathname==='/api/bootstrap'&&req.method==='GET'){
       const ws=requireWorkspace(user.id,url.searchParams.get('workspaceId'));
       const categories=all('SELECT * FROM categories WHERE workspace_id=? ORDER BY position,name',ws.id), channels=all('SELECT * FROM channels WHERE workspace_id=? ORDER BY position,name',ws.id);
       const threads=all('SELECT * FROM threads WHERE workspace_id=? ORDER BY updated_at DESC',ws.id);
-      const agents=all('SELECT id,workspace_id,name,avatar,color,description,type,status,endpoint,model,external_id,created_at FROM agents WHERE workspace_id=? ORDER BY name',ws.id);
+      const agents=all('SELECT id,workspace_id,name,avatar,color,description,type,status,endpoint,model,external_id,created_at FROM agents WHERE workspace_id=? ORDER BY name',ws.id).map(bridge.view);
       const members=all('SELECT u.id,u.display_name,u.username,u.avatar,u.color,u.status,m.role FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.workspace_id=? ORDER BY u.display_name',ws.id);
       const dms=all('SELECT * FROM dms WHERE workspace_id=? AND (user_id=? OR participant_user_id=?) ORDER BY created_at DESC',ws.id,user.id,user.id);
       const preferences=all('SELECT * FROM preferences WHERE user_id=?',user.id);
       const reads=all('SELECT * FROM reads WHERE user_id=?',user.id);
-      const runs=all('SELECT r.id,r.agent_id,r.target_type,r.target_id,r.status,r.error,r.created_at,r.finished_at FROM runs r WHERE r.workspace_id=? ORDER BY r.created_at DESC LIMIT 25',ws.id);
-      return asJSON(res,200,{ok:true,user,workspace:ws,categories,channels,threads,members,agents,dms,preferences,reads,runs,demo});
+      const runs=all('SELECT r.id,r.agent_id,r.target_type,r.target_id,r.status,r.error,r.created_at,r.finished_at,j.progress FROM runs r LEFT JOIN bridge_jobs j ON j.id=r.id WHERE r.workspace_id=? ORDER BY r.rowid DESC LIMIT 50',ws.id).filter(r=>canReadTarget(user.id,r.target_type,r.target_id));
+      return asJSON(res,200,{ok:true,user,workspace:ws,categories,channels,threads,members,agents,dms,preferences,reads,runs,demo,settings:settings.view(user.id),workspaces:all('SELECT w.* FROM workspaces w JOIN memberships m ON m.workspace_id=w.id WHERE m.user_id=?',user.id),approvals:bridge.approvals(user,ws.id)});
     }
     if(pathname==='/api/events'&&req.method==='GET'){
       const ws=requireWorkspace(user.id,url.searchParams.get('workspaceId'));
@@ -317,6 +327,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     if(agentRoute&&['PATCH','DELETE'].includes(req.method)){
       const agent=get('SELECT * FROM agents WHERE id=?',agentRoute[1]);if(!agent)throw failure(404,'Agent not found');requireWorkspace(user.id,agent.workspace_id);requireAdmin(user.id,agent.workspace_id);
       if(req.method==='DELETE'){run('UPDATE threads SET agent_id=NULL WHERE agent_id=?',agent.id);for(const dm of all('SELECT id FROM dms WHERE participant_agent_id=?',agent.id))purgeConversation('dm',dm.id);run('DELETE FROM dms WHERE participant_agent_id=?',agent.id);run('DELETE FROM agents WHERE id=?',agent.id);audit(user.id,agent.workspace_id,'agent.delete','agent',agent.id);broadcast(agent.workspace_id);return asJSON(res,200,{ok:true})}
+      if(agent.type==='bridge')throw failure(400,'Use connection settings for a paired agent');
       const input=await bodyJSON(req);const type=cut(input.type??agent.type,25);if(!['demo','openai','opaya','webhook'].includes(type))throw failure(400,'Unknown connector type');
       const endpoint=cut(input.endpoint??agent.endpoint,600);if(type!=='demo')assertEndpoint(endpoint);
       const sec=input.secret?encryptSecret(cut(input.secret,2000)):agent.secret_encrypted;
@@ -325,7 +336,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     }
     if(pathname==='/api/runs'&&req.method==='GET'){
       const ws=requireWorkspace(user.id,url.searchParams.get('workspaceId'));const rows=all('SELECT * FROM runs WHERE workspace_id=? ORDER BY created_at DESC LIMIT 50',ws.id);
-      return asJSON(res,200,{ok:true,runs:rows});
+      return asJSON(res,200,{ok:true,runs:rows.filter(r=>canReadTarget(user.id,r.target_type,r.target_id))});
     }
     if(pathname==='/api/audit'&&req.method==='GET'){
       const ws=requireWorkspace(user.id,url.searchParams.get('workspaceId'));requireAdmin(user.id,ws.id);return asJSON(res,200,{ok:true,events:all('SELECT * FROM audit WHERE workspace_id=? ORDER BY created_at DESC LIMIT 100',ws.id)});
@@ -340,12 +351,13 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     throw failure(404,'API endpoint not found');
   }
   const server=http.createServer((req,res)=>{void route(req,res).catch(error=>{if(res.headersSent){try{res.end()}catch{}return;}const status=error.status||500;if(status>=500)console.error('Cord server error:',error);asJSON(res,status,{ok:false,error:status>=500?'Internal error':error.message})})});
-  server.on('close',()=>{for(const c of listeners){try{c.res.end()}catch{}};store.close()});
+  server.on('close',()=>{bridge.close();for(const c of listeners){try{c.res.end()}catch{}};store.close()});
   return {server,store};
 }
 
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   if (existsSync(join(ROOT,'.env'))) process.loadEnvFile(join(ROOT,'.env'));
+  if(!process.env.CORD_MASTER_KEY){const directory=join(ROOT,'data');mkdirSync(directory,{recursive:true,mode:0o700});const keyFile=join(directory,'master.key');if(!existsSync(keyFile))writeFileSync(keyFile,randomBytes(32).toString('hex'),{mode:0o600,flag:'wx'});process.env.CORD_MASTER_KEY=readFileSync(keyFile,'utf8').trim();}
   const {server}=createApp();const host=process.env.HOST||'127.0.0.1',port=Number(process.env.PORT||3000);
   server.listen(port,host,()=>console.log(`Cord AI running at http://${host}:${server.address().port} (${isDemo()?'DEMO':'PRODUCTION'} mode)`));
 }

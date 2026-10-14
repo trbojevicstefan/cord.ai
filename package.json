@@ -1,16 +1,19 @@
 {
   "name": "cord-ai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Thread-first collaboration for teams and AI agents",
-  "engines": {"node": ">=22.13.0"},
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/index.mjs",
     "dev": "node --watch --disable-warning=ExperimentalWarning server/index.mjs",
     "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.mjs",
-    "check": "node --check server/index.mjs && node --check server/database.mjs && node --check server/agents.mjs && node --check public/app.js && node --check public/icons.js",
-    "build": "npm run check"
+    "check": "node scripts/check.mjs",
+    "build": "npm run check",
+    "bridge": "node bridge/runner.cjs"
   },
   "license": "UNLICENSED"
 }

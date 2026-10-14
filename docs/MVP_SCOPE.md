@@ -1,32 +1,15 @@
-# MVP acceptance scope and known gaps
+# Implemented scope and remaining work
 
-| Flow | MVP state |
-| --- | --- |
-| Original Discord-like dark theme and three-pane layout | Built |
-| Channel/category hierarchy and nested threads in left sidebar | Built |
-| Thread previews embedded into channel message feed | Built |
-| Right-click thread menu, edit/delete, favorite/mute, close/lock, join | Built |
-| Right-click channel/category/empty sidebar, create/edit/delete | Built |
-| Full-screen thread editor: name, slowmode, inactivity, spoiler, agent | Built UI and persisted settings |
-| DMs with team members or AI agents | Built |
-| User profile popover, user settings and agent profiles | Built UX foundation |
-| Live multi-tab updates, persistence, invites and basic roles | Built with SQLite + SSE |
-| Message search, copy, message deletion, readable Markdown | Built basic UX |
-| Agent assigned to a thread with auto/mention-only/off dispatch | Built |
-| Encrypted API keys, OpenAI-compatible models, signed bridge | Built and integration tested |
-| Direct native OPAYA Desktop runtime integration | **Not built** — requires supported headless gateway/bridge |
-| Voice, screenshare, rich file upload, emoji reactions | Not built |
-| Granular ACL, moderation, advanced notifications | Not built |
-| Background archive-by-inactivity worker | Not built (setting is stored only) |
-| Production performance/load/security hardening and multi-region | Not built |
+Cord 0.2 implements channels, categories, nested threads, branching from messages, DMs, roles/invites, first-account setup, browser realtime updates, SQLite persistence, profiles, search and agent execution.
 
-## Suggested next milestones
+- Prompt enrollment for Claude Code, Codex, Hermes, OpenClaw and OPAYA.
+- Native OPAYA desktop pairing/local service, retaining Vault, MCP and approvals.
+- Downloadable bridge, discovery, background worker and management commands.
+- Durable queue, scoped sessions, heartbeat, progress, cancellation, approvals, duplicate-result protection and revocation.
+- Connection name, description, model, instructions, effort, timeout, pause/resume, reconnect, test and disconnect.
+- Profile, password, sessions, workspace name/icon, appearance, density, font, send behavior, activity indicators, browser notifications/sound, export and conversation preferences.
+- Windows/Linux CI and API/worker tests. Actual local Claude Code and Codex replies were exercised manually.
 
-1. Add OPAYA bridge to existing desktop app or create a separate operator-approved service; prove native session management end-to-end without exposing Vault/secrets.
-2. Build role/per-channel ACL, human approvals for agent tools, stronger multi-tenant boundaries and durable job runner.
-3. Realtime streaming replies, reactions, attachments, typing and unread notification delivery.
-4. Full accessibility/keyboard audit, responsive interactions, load testing and production deploy.
+This remains a single-server collaboration app. Voice/video/screenshare, rich attachment uploads, complete emoji reactions, granular channel ACLs, notifications while the browser is closed, archive-by-inactivity scheduling, bridge login startup and multi-region operation remain separate work. Slowmode, manual archive, lock and preferences persist. Optional demo agents are simulated and labeled.
 
-## QA
-
-Run `npm test && npm run build`; tests create temporary SQLite files and a temporary signed bridge mock. They do not contact any third-party AI API. Visual smoke testing has been performed against seed data; in this runtime browser direct localhost navigation was policy-blocked, so DOM rendering and interactions were tested with an isolated Playwright browser mock of API responses. Backend was tested with real HTTP requests.
+Live answers require the runtime’s own valid login, model access and gateway. Cord provides no model subscription and does not silently replace invalid provider keys. Production TLS hosting and load/security review remain deployment work.

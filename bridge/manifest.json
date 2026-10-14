@@ -1,0 +1,39 @@
+{
+  "source": {
+    "repository": "https://github.com/trbojevicstefan/agenthub",
+    "commit": "201fca91c953fa7fede822874bdff7b924716a76",
+    "note": "OPAYA runtime adapters and transitive pure-Node dependencies, reused with repository owner authorization. Do not hand-edit; refresh from the pinned source."
+  },
+  "files": [
+    "runner.cjs",
+    "opaya-service.cjs",
+    "vendor/opaya/SOURCE.json",
+    "vendor/opaya/adapters/acp.cjs",
+    "vendor/opaya/adapters/claude.cjs",
+    "vendor/opaya/adapters/codex.cjs",
+    "vendor/opaya/adapters/http.cjs",
+    "vendor/opaya/adapters/index.cjs",
+    "vendor/opaya/attachments.cjs",
+    "vendor/opaya/catalog.cjs",
+    "vendor/opaya/clone-cli.cjs",
+    "vendor/opaya/clone.cjs",
+    "vendor/opaya/containers.cjs",
+    "vendor/opaya/diagnostics.cjs",
+    "vendor/opaya/discovery.cjs",
+    "vendor/opaya/effort.cjs",
+    "vendor/opaya/maintenance.cjs",
+    "vendor/opaya/mcp.cjs",
+    "vendor/opaya/openclaw.cjs",
+    "vendor/opaya/process.cjs",
+    "vendor/opaya/profiles.cjs",
+    "vendor/opaya/providers.cjs",
+    "vendor/opaya/rpc.cjs",
+    "vendor/opaya/schema.cjs",
+    "vendor/opaya/secrets.cjs",
+    "vendor/opaya/toolchain.cjs",
+    "vendor/opaya/tunnel.cjs",
+    "vendor/opaya/updates.cjs",
+    "vendor/opaya/vision.cjs",
+    "vendor/opaya/wire.cjs"
+  ]
+}

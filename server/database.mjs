@@ -101,15 +101,26 @@ export function createDatabase(path, options = {}) {
     );
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-      agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
+      agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL, message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
       target_type TEXT NOT NULL, target_id TEXT NOT NULL,
-      status TEXT NOT NULL, error TEXT DEFAULT '', created_at TEXT NOT NULL, finished_at TEXT
+      status TEXT NOT NULL, error TEXT DEFAULT '', created_at TEXT NOT NULL, finished_at TEXT, UNIQUE(agent_id,message_id)
     );
     CREATE TABLE IF NOT EXISTS audit (
       id TEXT PRIMARY KEY, workspace_id TEXT, user_id TEXT, action TEXT NOT NULL,
       target_type TEXT, target_id TEXT, meta TEXT DEFAULT '{}', created_at TEXT NOT NULL
     );
   `);
+  // Upgrade the initial one-agent-per-message constraint without losing run history.
+  if(/message_id TEXT NOT NULL UNIQUE/.test(db.prepare("SELECT sql FROM sqlite_master WHERE name='runs'").get().sql)){
+    db.exec(`PRAGMA foreign_keys=OFF;
+      BEGIN;
+      CREATE TABLE runs_new (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL, message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, target_type TEXT NOT NULL,target_id TEXT NOT NULL,status TEXT NOT NULL,error TEXT DEFAULT '',created_at TEXT NOT NULL,finished_at TEXT,UNIQUE(agent_id,message_id));
+      INSERT INTO runs_new SELECT * FROM runs;
+      DROP TABLE runs;
+      ALTER TABLE runs_new RENAME TO runs;
+      COMMIT;
+      PRAGMA foreign_keys=ON;`);
+  }
   const get = (sql,...params) => db.prepare(sql).get(...params);
   const all = (sql,...params) => db.prepare(sql).all(...params);
   const run = (sql,...params) => db.prepare(sql).run(...params);

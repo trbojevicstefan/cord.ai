@@ -1,4 +1,5 @@
 import { icon } from './icons.js';
+import { createConnectionViews } from './connections.js';
 
 const app=document.querySelector('#app');
 const state={data:null,selected:{type:'channel',id:'channel-chat'},messages:[],dmView:false,screen:'chat',modal:null,menu:null,profile:null,selectedSettings:'account',searchOpen:false,searchResults:[],searchQuery:'',sidebarOpen:true,memberPanel:true,collapsed:new Set(),hideMuted:false,showArchived:false,threadShow:'all',drafts:{},typing:{},lastSelection:'',toast:null,busy:false,returnScreen:'chat'};
@@ -9,6 +10,7 @@ const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;
 const attr=esc;
 const data=()=>state.data||{};
 const A=()=>data().agents||[];
+const connections=createConnectionViews({esc,icon,A,admin:()=>admin(),avatar:(...args)=>avatar(...args)});
 const U=()=>data().members||[];
 const C=()=>data().channels||[];
 const T=()=>data().threads||[];
@@ -41,11 +43,12 @@ async function api(path,opts={}){
 function toast(message,kind='info'){state.toast={message,kind};renderOverlays();clearTimeout(toast._timer);toast._timer=setTimeout(()=>{state.toast=null;renderOverlays()},4200)}
 function handleError(error){console.error(error);toast(error?.message||'Something went wrong','error')}
 async function loadData({messages=true,keepScroll=false}={}){
-  const result=await api('/bootstrap');state.data=result;
+  const previousMessages=new Set(state.messages.map(m=>m.id));
+  const result=await api('/bootstrap'+(state.workspaceId?'?workspaceId='+encodeURIComponent(state.workspaceId):''));state.data=result;applySettings();
   if(!current()){
     const fallback=state.dmView?D()[0]:C()[0];state.selected=fallback?{type:state.dmView?'dm':'channel',id:fallback.id}:{type:'channel',id:''};
   }
-  if(messages&&current())await loadMessages();
+  if(messages&&current()){await loadMessages();if(keepScroll&&previousMessages.size&&document.hidden){const incoming=state.messages.filter(m=>!previousMessages.has(m.id)&&m.author_id!==me().id&&m.author_type!=='system');const pref=prefs(state.selected.type,state.selected.id);if(incoming.length&&!pref.muted&&pref.notification_level!=='none'&&(pref.notification_level!=='mentions'||incoming.some(m=>m.content.toLowerCase().includes('@'+me().username.toLowerCase())))){const last=incoming.at(-1);if(result.settings.desktopNotifications&&'Notification' in window&&Notification.permission==='granted')new Notification(userName(last.author_type,last.author_id),{body:last.content.slice(0,160),tag:state.selected.id});if(result.settings.notificationSound){try{const Audio=window.AudioContext||window.webkitAudioContext;const audio=new Audio(),tone=audio.createOscillator(),gain=audio.createGain();tone.connect(gain);gain.connect(audio.destination);gain.gain.value=.035;tone.frequency.value=660;tone.start();tone.stop(audio.currentTime+.12);tone.onended=()=>audio.close();}catch{}}}}}
   render({keepScroll});
 }
 async function loadMessages(){
@@ -61,7 +64,8 @@ async function markRead(type,id){try{await api('/read',{method:'POST',body:{targ
 function initEvents(){
   let stream;const connect=()=>{if(!state.data?.workspace)return;stream?.close();stream=new EventSource('/api/events?workspaceId='+encodeURIComponent(state.data.workspace.id));
     let timer; stream.addEventListener('change',()=>{clearTimeout(timer);timer=setTimeout(()=>loadData({keepScroll:true}).catch(handleError),150)});
-    stream.addEventListener('agent',ev=>{try{const a=JSON.parse(ev.data),k=a.targetType+':'+a.targetId;state.typing[k]=a.status==='running'?a.agentId:null;if(a.status==='failed')toast(`Agent run failed: ${a.error||'Unknown error'}`,'error');renderMessagesOnly()}catch{}});
+    stream.addEventListener('agent',ev=>{try{const a=JSON.parse(ev.data),k=a.targetType+':'+a.targetId;state.typing[k]=['queued','running'].includes(a.status)?a.agentId:null;if(a.status==='failed')toast(`Agent run failed: ${a.error||'Unknown error'}`,'error');renderMessagesOnly()}catch{}});
+    stream.addEventListener('progress',ev=>{try{const p=JSON.parse(ev.data),r=data().runs?.find(r=>r.id===p.runId);if(r)r.progress=p.progress;if(state.modal?.kind==='runs')renderOverlays();else if(state.screen==='settings'&&state.selectedSettings==='runs')render();}catch{}});
     stream.onerror=()=>{};
   };connect();return connect;
 }
@@ -182,8 +186,8 @@ function messagesPanel(){
   if(!current())return `<div class="empty-center"><h2>Choose a channel</h2><p>Start a conversation with your team or agents.</p></div>`;
   const type=state.selected.type,id=state.selected.id,key=type+':'+id,t=thread(id),disable=type==='thread' && (t?.archived||(t?.locked&&!admin()&&t.author_id!==me().id));
   const typingAgent=agent(state.typing[key]);
-  return `<div class="chat-scroll" id="chat-scroll"><div class="chat-content">${intro()}${state.messages.length?`<div class="date-divider"><span>${esc(prettyDate(state.messages[0].created_at))}</span></div>`:''}${state.messages.map(messageBubble).join('')}${typingAgent?`<div class="typing-indicator"><span class="typing-dots"><i></i><i></i><i></i></span> ${esc(typingAgent.name)} is thinking…</div>`:''}</div></div>
-  <div class="composer-holder">${disable?`<div class="composer-disabled">${icon('lock',18)} This thread is ${t.archived?'closed':'locked'} · Ask a moderator to reopen it</div>`:`<form class="composer" id="composer" data-form="message"><button class="composer-add" type="button" data-action="composer-add" title="Add attachment or create thread">${icon('plus',22)}</button><textarea aria-label="Message" id="message-input" placeholder="Message ${type==='thread'?esc(t?.name):type==='channel'?'#'+esc(channel(id)?.name):'@'+esc(targetTitle())}" rows="1">${esc(state.drafts[key]||'')}</textarea><div class="composer-tools"><button type="button" class="composer-tool" data-action="insert-emoji" title="Emoji">${icon('smile',20)}</button><button type="button" class="composer-tool" data-action="insert-mention" title="Mention agent">${icon('bot',20)}</button><button type="submit" class="composer-send" title="Send message">${icon('send',18)}</button></div></form>`}<div class="composer-hint">${type==='thread'?`${esc(agent(t?.agent_id)?.name||'No agent assigned')} · ${esc(t?.agent_mode||'mentions')} replies · `:''}<b>Enter</b> to send · <b>Shift+Enter</b> for a new line</div></div>`;
+  return `<div class="chat-scroll" id="chat-scroll"><div class="chat-content">${intro()}${state.messages.length?`<div class="date-divider"><span>${esc(prettyDate(state.messages[0].created_at))}</span></div>`:''}${state.messages.map(messageBubble).join('')}${typingAgent&&data().settings?.showTyping!==false?`<div class="typing-indicator"><span class="typing-dots"><i></i><i></i><i></i></span> ${esc(typingAgent.name)} is thinking…</div>`:''}</div></div>
+  ${connections.approvals((data().approvals||[]).filter(p=>p.target_type===type&&p.target_id===id))}<div class="composer-holder">${disable?`<div class="composer-disabled">${icon('lock',18)} This thread is ${t.archived?'closed':'locked'} · Ask a moderator to reopen it</div>`:`<form class="composer" id="composer" data-form="message"><button class="composer-add" type="button" data-action="composer-add" title="Add attachment or create thread">${icon('plus',22)}</button><textarea aria-label="Message" id="message-input" placeholder="Message ${type==='thread'?esc(t?.name):type==='channel'?'#'+esc(channel(id)?.name):'@'+esc(targetTitle())}" rows="1">${esc(state.drafts[key]||'')}</textarea><div class="composer-tools"><button type="button" class="composer-tool" data-action="insert-emoji" title="Emoji">${icon('smile',20)}</button><button type="button" class="composer-tool" data-action="insert-mention" title="Mention agent">${icon('bot',20)}</button><button type="submit" class="composer-send" title="Send message">${icon('send',18)}</button></div></form>`}<div class="composer-hint">${type==='thread'?`${esc(agent(t?.agent_id)?.name||'No agent assigned')} · ${esc(t?.agent_mode||'mentions')} replies · `:''}<b>${data().settings?.enterToSend===false?'Ctrl+Enter':'Enter'}</b> to send · <b>Shift+Enter</b> for a new line</div></div>`;
 }
 function chatShell(){return `<div class="app-shell">
   <div class="window-bar"><div class="window-left">${icon('arrow',14)} ${icon('chevron',14)}</div><div class="window-center"><span class="window-brand">C</span><span>${esc(data().workspace?.name||'Cord AI')}</span></div><div class="window-right"><span class="secure-dot"></span> Team & Agents</div></div>
@@ -224,17 +228,27 @@ const settingSections=[
 function settingsView(){
   return `<div class="settings-layout"><aside class="settings-sidebar"><div class="settings-sidebar-content"><div class="settings-identity">${avatar(me(),36)}<span><b>${esc(me().display_name)}</b><small>${esc(me().username)}</small></span></div><button class="settings-search" data-action="settings-search">${icon('search',18)} Search settings</button>
   ${settingSections.map(g=>`<div class="settings-nav-title">${g.title}</div>${g.items.map(([key,label,ico])=>`<button class="settings-nav ${state.selectedSettings===key?'active':''}" data-action="settings-section" data-section="${key}">${icon(ico,18)}<span>${label}</span></button>`).join('')}<div class="settings-sep"></div>`).join('')}
-  <button class="settings-nav danger" data-action="logout">${icon('log-out',18)} Log out</button><div class="settings-footer">CORD AI · MVP 0.1<br/>Your team. Your agents.</div></div></aside>
+  <button class="settings-nav danger" data-action="logout">${icon('log-out',18)} Log out</button><div class="settings-footer">CORD AI · 0.2<br/>Your team. Your agents.</div></div></aside>
   <main class="settings-main"><div class="settings-inner"><button class="settings-exit" data-action="exit-settings" title="Close">${icon('close',23)}<small>ESC</small></button>${settingsContent()}</div></main></div>`;
 }
-function settingsContent(){switch(state.selectedSettings){
- case 'account':return `<div class="settings-page-title">Account</div><div class="settings-section"><h2>Account Info</h2><div class="settings-info-row"><div><strong>Username</strong></div><div class="settings-value">${esc(me().username)}</div><button class="small-edit" data-action="edit-profile">Edit</button></div><div class="settings-info-row"><div><strong>Display Name</strong></div><div class="settings-value">${esc(me().display_name)}</div><button class="small-edit" data-action="edit-profile">Edit</button></div><div class="settings-info-row"><div><strong>Presence</strong></div><div class="settings-value"><span class="status-dot"></span> ${esc(me().status||'Online')}</div><button class="small-edit" data-action="edit-profile">Edit</button></div></div><div class="settings-section"><h2>Password &amp; Security</h2><div class="settings-info-row"><strong>Password</strong><span class="settings-note">Managed by your Cord login</span><button class="small-edit" data-action="show-help">Info</button></div><div class="settings-info-row"><strong>Active Sessions</strong><span class="settings-note">Session cookies are HTTP-only</span></div></div><div class="settings-section"><h2>Workspace Role</h2><div class="info-banner">${icon('shield-check',21)} You are ${esc(member(me().id)?.role||'a member')} of ${esc(data().workspace?.name)}.</div></div>`;
- case 'notifications':return `<div class="settings-page-title">Notifications</div><div class="settings-section"><h2>Thread notification controls</h2><p class="muted-paragraph">Right-click any channel, thread, or category to choose All messages, Mentions only, or Mute. These preferences are per user and persist in the database.</p><div class="settings-info-row"><span>Thread activity</span><strong>Available</strong></div><div class="settings-info-row"><span>Desktop push</span><span class="settings-note">Not yet in MVP</span></div></div>`;
- case 'appearance':return `<div class="settings-page-title">Appearance</div><div class="settings-section"><h2>Theme</h2><div class="theme-card selected"><div class="theme-thumbnail"><i></i><i></i><i></i></div><b>Dark · Midnight</b><small>Optimized for focus, modeled on your supplied references.</small></div></div><div class="settings-section"><h2>Compact Mode</h2><p class="muted-paragraph">The interface uses a compact, desktop-first message density similar to Discord.</p></div>`;
- case 'agents':return `<div class="settings-page-title">Connected Agents</div><div class="settings-section"><h2>Your workspace agents</h2><p class="muted-paragraph">Every agent has an identity, a connector type, and can be assigned to individual threads.</p>${A().map(a=>`<div class="settings-agent-row">${avatar(a,34,'agent')}<span><b>${esc(a.name)}</b><small>${esc(a.type)} connector</small></span><button class="small-edit" data-action="edit-agent" data-id="${a.id}">Configure</button></div>`).join('')}<button class="button-primary" data-action="connect-agent">${icon('plus',16)} Connect Agent</button></div>`;
- case 'runs':return `<div class="settings-page-title">Agent Runs</div><div class="settings-section"><h2>Execution log</h2>${(data().runs||[]).length?data().runs.map(r=>`<div class="settings-agent-row">${icon('terminal',20)}<span><b>${esc(agent(r.agent_id)?.name||'Agent')} · ${esc(r.status)}</b><small>${esc(r.target_type)} · ${prettyDate(r.created_at)}</small></span></div>`).join(''):'<p class="muted-paragraph">No agent runs yet.</p>'}</div>`;
- case 'security':return `<div class="settings-page-title">Security & Access</div><div class="settings-section"><h2>Human control over agents</h2><p class="muted-paragraph">This MVP does not expose system tools to agents. External connectors can respond to messages only. Tool permissions and approvals will be added before executing privileged actions.</p><div class="info-banner">${icon('shield-check',19)} Agent API keys are encrypted at rest when CORD_MASTER_KEY is set.</div></div>`;
- default:return `<div class="settings-page-title">${esc(state.selectedSettings[0].toUpperCase()+state.selectedSettings.slice(1))}</div><div class="settings-section"><h2>Focus on collaboration</h2><p class="muted-paragraph">This setting will be expanded beyond the MVP. For now, use the thread and channel context menus to customize your workflow.</p><div class="info-banner">${icon('info',18)} Keyboard shortcuts: Ctrl/⌘+K for search, Ctrl/⌘+, for settings, Escape to close, Enter to send.</div></div>`;
+function applySettings(){
+ const s=data().settings||{};document.documentElement.dataset.theme=s.theme||'dark';document.documentElement.dataset.density=s.density||'comfortable';document.documentElement.style.setProperty('--message-font-size',(s.fontSize||13)+'px');
+}
+function preferenceSettings(section){
+ const s=data().settings||{};
+ const check=(key,label,hint)=>`<div class="settings-info-row"><span><strong>${label}</strong><small class="field-hint">${hint}</small></span>${switcher(key,s[key])}</div>`;
+ if(['appearance','messaging','notifications'].includes(section))return `<div class="settings-page-title">${section[0].toUpperCase()+section.slice(1)}</div><form data-form="preferences" class="settings-section"><h2>Display</h2>${field('THEME',select('theme',opts([['dark','Midnight'],['light','Daylight']],s.theme)))}${field('MESSAGE DENSITY',select('density',opts([['comfortable','Comfortable'],['compact','Compact']],s.density)))}${field('MESSAGE FONT SIZE',select('fontSize',opts([12,13,14,16,18].map(n=>[n,n+' px']),s.fontSize)))}<h2>Messaging</h2>${check('enterToSend','Enter to send','When off, use Ctrl/⌘+Enter to send. Shift+Enter always inserts a line break.')}${check('showTyping','Show agent activity','Show when an agent is queued or working in your conversation.')}<h2>Notifications</h2>${check('desktopNotifications','Desktop notifications','Notify about new messages in the open conversation while Cord is in the background.')}${check('notificationSound','Message sound','Play a short sound for background conversation activity.')}<div class="connection-actions"><button type="button" class="button-secondary" data-action="enable-notifications">Allow Desktop Notifications</button><button type="submit" class="button-primary">Save Preferences</button></div><p class="muted-paragraph">Per-channel mute and notification levels are available in each conversation’s right-click menu. Preferences sync with your account.</p></form>`;
+ if(section==='account')return `<div class="settings-page-title">Account</div><div class="settings-section"><h2>Your Profile</h2><div class="settings-info-row"><strong>${esc(me().display_name)}</strong><span>@${esc(me().username)}</span><button class="button-secondary" data-action="edit-profile">Edit Profile</button></div><div class="connection-actions"><button class="button-secondary" data-action="change-password">Change Password</button><button class="button-secondary" data-action="show-sessions">Manage Sessions</button></div></div>${admin()?`<form class="settings-section" data-form="workspace"><h2>Workspace</h2>${field('WORKSPACE NAME',input('name',data().workspace.name,'required minlength="2" maxlength="80"'))}${field('ICON',input('icon',data().workspace.icon||'C','maxlength="3"'))}<button class="button-primary" type="submit">Save Workspace</button></form>`:''}`;
+ if(section==='privacy')return `<div class="settings-page-title">Data & Privacy</div><div class="settings-section"><h2>Your Data</h2><p class="muted-paragraph">Messages and preferences are stored on this Cord server. A paired agent only receives the recent history of conversations it is asked to answer. Runtime logins stay on the agent’s computer. Pairing codes expire after 15 minutes; bridge access can be revoked at any time.</p><button class="button-secondary" data-action="export-data">Export My Accessible Data</button></div><div class="settings-section"><h2>Local Data</h2><p class="muted-paragraph">Reset saved drafts, sidebar state, and navigation on this browser. Account preferences and team conversations are preserved.</p><button class="button-secondary" data-action="clear-local">Reset Browser Preferences</button></div>`;
+ if(section==='shortcuts')return `<div class="settings-page-title">Keyboard Shortcuts</div><div class="settings-section">${[['Ctrl / ⌘ + K','Search'],['Ctrl / ⌘ + ,','Open settings'],['Escape','Close a menu or dialog / return to chat'],['Enter','Send a message (when enabled)'],['Ctrl / ⌘ + Enter','Send a message'],['Shift + Enter','New line'],['Right-click','Conversation and message actions']].map(([key,label])=>`<div class="settings-info-row"><strong>${label}</strong><kbd>${key}</kbd></div>`).join('')}</div>`;
+ return '';
+}
+function securitySettings(){return `<div class="settings-page-title">Security & Access</div><div class="settings-section"><h2>Agent Permissions</h2><p class="muted-paragraph">Only workspace admins can pair, configure, or disconnect agents. Agent messages never trigger other agents. Codex and Hermes ACP tool requests appear here for approval; Claude Code uses its configured native permissions. A bridge can only claim jobs for its paired identity.</p>${connections.approvals(data().approvals||[])}<button class="button-secondary" data-action="show-sessions">Manage My Sessions</button></div><div class="settings-section"><h2>Connected Devices</h2>${connections.cards()}</div>`;}
+function settingsContent(){const page=preferenceSettings(state.selectedSettings);if(page)return page;switch(state.selectedSettings){
+ case 'agents':return `<div class="settings-page-title">Connected Agents</div><div class="settings-section"><p class="muted-paragraph">Your local agents, connected to the team with one prompt.</p>${connections.cards()}${admin()?'<button class="button-primary" data-action="connect-agent">Connect Agent</button>':''}</div>`;
+ case 'runs':return `<div class="settings-page-title">Agent Runs & Approvals</div>${connections.approvals(data().approvals||[])}${connections.runs(data().runs||[])}`;
+ case 'security':return securitySettings();
+ default:return preferenceSettings('account');
 }}
 function modalFrame(title,content,{description='',wide=false,footer=''}={}){return `<div class="modal-scrim" data-action="dismiss-modal"><div class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-label="${esc(title)}" data-stop-click="true"><div class="modal-head"><div><h2>${esc(title)}</h2>${description?`<p>${esc(description)}</p>`:''}</div><button type="button" class="modal-x" data-action="dismiss-modal">${icon('close',20)}</button></div>${content}${footer}</div></div>`}
 function modalBody(){const modal=state.modal;if(!modal)return '';
@@ -248,21 +262,25 @@ function modalBody(){const modal=state.modal;if(!modal)return '';
  case 'notifications':{const p=prefs(modal.targetType,modal.id);return modalFrame('Notification Settings',`<div class="modal-form"><p class="muted-paragraph">Choose how often you receive notifications for this ${esc(modal.targetType)}.</p>${[['all','All Messages','Get notified when anyone sends a message'],['mentions','Only @mentions','Only when someone explicitly tags you'],['none','Nothing','Mute this conversation']].map(([v,label,description])=>`<button class="notification-option ${p.notification_level===v?'selected':''}" data-action="set-notif" data-id="${modal.id}" data-target="${modal.targetType}" data-level="${v}"><span class="radio-indicator"></span><span><b>${label}</b><small>${description}</small></span></button>`).join('')}</div>`)}
  case 'delete-confirm':return modalFrame('Delete '+(modal.targetType==='thread'?'Thread':modal.targetType==='category'?'Category':modal.targetType==='agent'?'Agent':'Channel'),`<div class="modal-form"><div class="danger-callout">${icon('info',19)} This will permanently delete the selected ${esc(modal.targetType)}. This action cannot be undone.</div><div class="modal-footer"><button type="button" class="button-secondary" data-action="dismiss-modal">Cancel</button><button type="button" class="button-danger" data-action="confirm-delete">Delete</button></div></div>`);
  case 'new-dm':return modalFrame('New Direct Message',`<div class="modal-form"><div class="modal-search-field">${icon('search',18)} Search for a teammate or agent</div>${[...U().filter(u=>u.id!==me().id).map(u=>({...u,kind:'user',name:u.display_name})),...A().map(a=>({...a,kind:'agent'}))].map(person=>`<button class="person-select" data-action="create-dm" data-kind="${person.kind}" data-id="${person.id}">${avatar(person,33,person.kind)}<span>${esc(person.name||person.display_name)}</span>${person.kind==='agent'?'<b class="badge-app">APP</b>':''}</button>`).join('')}</div>`);
- case 'agent-directory':return modalFrame('AI Agent Directory',`<div class="modal-form agent-directory"><div class="directory-description">Connect your own OpenAI-compatible, OPAYA bridge, or webhook agents. Assign them to threads or message them directly.</div>${A().map(a=>`<div class="agent-directory-card">${avatar(a,43,'agent')}<div class="agent-dir-text"><b>${esc(a.name)} <span class="badge-app">APP</span></b><small>${esc(a.description||a.type+' connector')}</small><span class="agent-dir-type">${icon('terminal',13)} ${esc(a.type)}</span></div><div class="agent-directory-buttons"><button class="small-edit" data-action="dm-agent" data-id="${a.id}">Message</button>${admin()?`<button class="small-edit" data-action="edit-agent" data-id="${a.id}">Configure</button>`:''}</div></div>`).join('')}<button class="button-primary" data-action="connect-agent">${icon('plus',16)} Connect new agent</button></div>`,{wide:true});
- case 'connect-agent':case 'edit-agent':{
+ case 'agent-directory':return modalFrame('AI Agent Directory',`<div class="modal-form agent-directory"><p class="muted-paragraph">Claude Code, Codex, Hermes, OpenClaw and OPAYA — your agents, working with your team.</p>${connections.cards()}${admin()?'<button class="button-primary full" data-action="connect-agent">Connect an Agent</button>':''}</div>`,{wide:true});
+ case 'easy-connect':return modalFrame('Connect an Agent',connections.wizard(modal),{description:'One prompt. Your agent joins the team.',wide:true});
+ case 'connection-settings':{const a=agent(modal.id);return a?modalFrame(a.name,connections.settings(a),{wide:true}):'';}
+ case 'advanced-agent':case 'edit-agent':{
   const a=modal.id?agent(modal.id):null;return modalFrame(a?'Edit Agent Connector':'Connect an AI Agent',`<form data-form="${a?'edit-agent':'connect-agent'}" class="modal-form">
    ${field('AGENT NAME',input('name',a?.name||'',`required maxlength="65" placeholder="e.g. RWE Design" autofocus`))}
    ${field('DESCRIPTION',input('description',a?.description||'',`placeholder="What does this agent do?"`))}
    ${field('CONNECTOR TYPE',select('type',opts([['demo','Demo (no model — preview only)'],['openai','OpenAI-compatible API'],['opaya','OPAYA bridge'],['webhook','Custom webhook']],a?.type||'demo')))}
-   <div class="connector-help">${icon('info',16)} <span>A local OPAYA Desktop installation does not automatically expose a team API. Deploy the Cord bridge contract before selecting OPAYA.</span></div>
+   <div class="connector-help">${icon('info',16)} <span>For local runtimes, use Connect Agent and copy the generated prompt. This advanced form is for existing HTTP APIs and signed webhooks.</span></div>
    ${field('ENDPOINT URL',input('endpoint',a?.endpoint||'',`placeholder="https://your-agent.example/api/v1"`),'For OpenAI-compatible connectors: the base URL before /chat/completions. For OPAYA/webhook: the exact bridge POST URL.')}
    ${field('MODEL (OPENAI COMPATIBLE)',input('model',a?.model||'',`placeholder="gpt-4.1-mini"`))}
    ${field('EXTERNAL AGENT ID (OPAYA)',input('externalId',a?.external_id||'',`placeholder="agent-id-in-opaya"`))}
    ${field('API KEY / BRIDGE SHARED SECRET',`<input class="form-control" name="secret" type="password" placeholder="${a?'Leave blank to keep existing secret':'Stored encrypted with CORD_MASTER_KEY'}" autocomplete="new-password" />`)}
    <div class="modal-footer"><button type="button" class="button-secondary" data-action="dismiss-modal">Cancel</button><button type="submit" class="button-primary">${a?'Save Agent':'Connect Agent'}</button></div></form>`,{description:'Make your agents part of the team.',wide:true})}
- case 'runs':return modalFrame('Agent Runs',`<div class="modal-form"><p class="muted-paragraph">The latest agent executions in this workspace. Real model calls require a configured connector.</p>${(data().runs||[]).length?data().runs.slice(0,20).map(r=>`<div class="run-row">${icon(r.status==='completed'?'check':r.status==='failed'?'close':'clock',18)}<span><b>${esc(agent(r.agent_id)?.name||'Agent')}</b><small>${esc(r.target_type)} · ${dateTime(r.created_at)} · ${esc(r.error||r.status)}</small></span><span class="status-badge ${esc(r.status)}">${esc(r.status)}</span></div>`).join(''):'<div class="blank-state">No agent runs yet. Message an agent to get started.</div>'}</div>`,{wide:true});
+ case 'runs':return modalFrame('Agent Runs & Approvals',`<div class="modal-form">${connections.approvals(data().approvals||[])}${connections.runs(data().runs||[])}</div>`,{wide:true});
  case 'threads-browser':return modalFrame('Browse Threads',`<div class="modal-form"><div class="filter-row"><button class="pill ${state.showArchived?'':'selected'}" data-action="filter-threads" data-mode="active">Active</button><button class="pill ${state.showArchived?'selected':''}" data-action="filter-threads" data-mode="all">All threads</button></div>${T().filter(t=>t.channel_id===(modal.channelId||state.selected.id)&&(state.showArchived||!t.archived)).map(t=>`<button class="browser-thread" data-action="open-target" data-type="thread" data-id="${t.id}">${icon('threads',19)}<span><b>${esc(t.name)}</b><small>${esc(agent(t.agent_id)?.name||'Team thread')} ${t.archived?'· Archived':''}</small></span>${icon('chevron',15)}</button>`).join('')||'<p class="muted-paragraph">No threads in this channel yet.</p>'}<button class="button-primary" data-action="create-thread" data-channel="${modal.channelId||state.selected.id}">${icon('plus',16)} New Thread</button></div>`,{wide:true});
  case 'edit-profile':return modalFrame('Edit Profile',`<form data-form="edit-profile" class="modal-form">${field('DISPLAY NAME',input('displayName',me().display_name,'required maxlength="70" autofocus'))}${field('STATUS',select('status',opts([['online','Online'],['idle','Idle'],['busy','Do Not Disturb'],['invisible','Invisible']],me().status)))}<div class="modal-footer"><button class="button-secondary" type="button" data-action="dismiss-modal">Cancel</button><button class="button-primary" type="submit">Save Profile</button></div></form>`);
+ case 'password':return modalFrame('Change Password',`<form data-form="password" class="modal-form">${field('CURRENT PASSWORD','<input class="form-control" name="currentPassword" type="password" required autocomplete="current-password"/>')}${field('NEW PASSWORD','<input class="form-control" name="newPassword" type="password" minlength="10" required autocomplete="new-password"/>')}<div class="modal-footer"><button class="button-primary" type="submit">Change Password</button></div></form>`);
+ case 'sessions':return modalFrame('Active Sessions',`<div class="modal-form">${modal.sessions.map(s=>`<div class="settings-info-row"><strong>${s.current?'This session':'Other session'}</strong><span>Expires ${esc(new Date(s.expiresAt).toLocaleDateString())}</span></div>`).join('')}<button class="button-danger" data-action="revoke-sessions">Sign Out Other Sessions</button></div>`);
  case 'help':return modalFrame('About Cord AI',`<div class="modal-form"><p>Cord is a thread-first collaboration workspace for human teams and AI agents.</p><div class="help-line">${icon('threads',18)} Right-click a thread to edit, close, lock, mute, or assign it.</div><div class="help-line">${icon('message-circle',18)} Channels keep conversations organized; threads keep context focused.</div><div class="help-line">${icon('bot',18)} AI agents respond automatically in assigned threads, only when permitted by reply settings.</div><div class="info-banner">The sample agents use simulated responses. External connections require explicit configuration.</div></div>`);
  default:return '';
 }}
@@ -315,16 +333,19 @@ function searchView(){if(!state.searchOpen)return '';
      `<button data-action="goto-workspace">${icon('hash',18)} Go to team channels</button><button data-action="open-agent-directory">${icon('bot',18)} Open agent directory</button><button data-action="open-settings">${icon('settings',18)} User Settings</button>`}
   </div><div class="search-footer"><span><kbd>↵</kbd> Open result</span><span><kbd>ESC</kbd> Close</span><span>CORD SEARCH</span></div></div></div>`;
 }
-function renderOverlays(){const host=document.getElementById('overlays');if(!host)return;
+function captureModalForm(){const form=document.querySelector('#overlays form[data-form]');if(!form||state.busy)return null;return {kind:form.dataset.form,fields:[...form.elements].filter(el=>el.name).map(el=>({name:el.name,type:el.type,value:el.value,checked:el.checked})),focus:document.activeElement?.name,start:document.activeElement?.selectionStart,end:document.activeElement?.selectionEnd};}
+function renderOverlays(saved=captureModalForm()){const host=document.getElementById('overlays');if(!host)return;
  host.innerHTML=`${state.menu?`<div class="context-shade" data-action="close-menu"></div><div class="context-menu" style="left:${Math.max(4,Math.min(window.innerWidth-240,state.menu.x))}px;top:${Math.max(4,Math.min(window.innerHeight-490,state.menu.y))}px">${contextBody()}</div>`:''}
- ${state.profile?profileBody():''}${state.modal?modalBody():''}${searchView()}${state.toast?`<div class="toast ${state.toast.kind}">${icon(state.toast.kind==='error'?'info':'check',17)}<span>${esc(state.toast.message)}</span><button data-action="dismiss-toast" title="Dismiss">${icon('close',16)}</button></div>`:''}`;
+ ${state.profile?profileBody():''}${state.modal?modalBody():''}${searchView()}${data().approvals?.length&&!state.modal?`<button class="approval-inbox" data-action="open-run-log">${icon('shield-check',18)} ${data().approvals.length} agent approval${data().approvals.length>1?'s':''} pending</button>`:''}${state.toast?`<div class="toast ${state.toast.kind}">${icon(state.toast.kind==='error'?'info':'check',17)}<span>${esc(state.toast.message)}</span><button data-action="dismiss-toast" title="Dismiss">${icon('close',16)}</button></div>`:''}`;
+ const form=host.querySelector('form[data-form]');if(saved&&form?.dataset.form===saved.kind){for(const value of saved.fields){for(const el of form.elements){if(el.name!==value.name)continue;if(el.type==='radio'){if(el.value===value.value)el.checked=value.checked;}else if(el.type==='checkbox')el.checked=value.checked;else el.value=value.value;}}const focus=[...form.elements].find(el=>el.name===saved.focus);focus?.focus();if(saved.start!=null&&['text','password','textarea'].includes(focus?.type))focus.setSelectionRange(saved.start,saved.end);}
 }
 function render({keepScroll=false}={}){
   if(!state.data)return;
+  const savedForm=captureModalForm();
   const old=document.querySelector('#chat-scroll');const oldBottom=old?old.scrollHeight-old.clientHeight-old.scrollTop<130:true,oldTop=old?.scrollTop||0;
   const id=state.selected.type+':'+state.selected.id;const changed=state.lastSelection!==id;state.lastSelection=id;
   app.innerHTML=(state.screen==='edit-thread'?threadEditor():state.screen==='settings'?settingsView():chatShell())+'<div id="overlays"></div>';
-  renderOverlays();const scroller=document.querySelector('#chat-scroll');if(scroller){if(changed||oldBottom||!keepScroll)scroller.scrollTop=scroller.scrollHeight;else scroller.scrollTop=oldTop}
+  renderOverlays(savedForm);const scroller=document.querySelector('#chat-scroll');if(scroller){if(changed||oldBottom||!keepScroll)scroller.scrollTop=scroller.scrollHeight;else scroller.scrollTop=oldTop}
   if(state.modal?.kind==='create-thread')requestAnimationFrame(()=>app.querySelector('.modal [autofocus]')?.focus());
 }
 function renderMessagesOnly(){if(state.screen!=='chat')return;const old=document.querySelector('.conversation-area'),scroll=document.querySelector('#chat-scroll');if(!old)return;
@@ -398,8 +419,23 @@ async function doAction(button,event){const action=button.dataset.action,id=butt
   case 'show-invite':openModal('invite');break;
   case 'generate-invite':{const r=await api('/invites',{method:'POST',body:{workspaceId:data().workspace.id}});const link=new URL(window.location.href);link.searchParams.set('invite',r.code);state.modal.link=link.href;renderOverlays();break}
   case 'copy-invite':clipboard(state.modal.link);break;
-  case 'connect-agent':openModal('connect-agent');break;
-  case 'edit-agent':openModal('edit-agent',{id});break;
+  case 'connect-agent':openModal('easy-connect');break;
+  case 'advanced-connect':openModal('advanced-agent');break;
+  case 'copy-agent-prompt':clipboard(state.modal.prompt);break;
+  case 'refresh-connection':await loadData({keepScroll:true});toast(agent(state.modal?.agentId)?.status==='online'?'Agent connected':'Waiting for your agent to connect');break;
+  case 'reconnect-agent':{const a=agent(id);const r=await api('/agent-connections',{method:'POST',body:{workspaceId:data().workspace.id,agentId:id,runtime:a.runtime}});openModal('easy-connect',r);break;}
+  case 'pause-agent':await api(`/agent-connections/${id}/pause`,{method:'POST',body:{paused:!agent(id).paused}});await loadData({keepScroll:true});break;
+  case 'revoke-agent':await api(`/agent-connections/${id}/revoke`,{method:'POST',body:{}});await loadData({keepScroll:true});toast('Agent access revoked');break;
+  case 'test-agent':{const r=await api(`/agent-connections/${id}/test`,{method:'POST',body:{}});await loadData({messages:false});selectTarget('dm',r.dmId);break;}
+  case 'cancel-run':await api(`/runs/${id}/cancel`,{method:'POST',body:{}});await loadData({keepScroll:true});break;
+  case 'decide-approval':await api(`/approvals/${id}`,{method:'POST',body:{decision:button.dataset.decision}});await loadData({keepScroll:true});break;
+  case 'export-data':{const r=await api('/account/export');const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='cord-data.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);break;}
+  case 'clear-local':for(const key of Object.keys(localStorage))if(key.startsWith('cord:'))localStorage.removeItem(key);state.drafts={};state.collapsed=new Set();state.hideMuted=false;render();toast('Browser preferences reset');break;
+  case 'change-password':openModal('password');break;
+  case 'show-sessions':{const r=await api('/account/sessions');openModal('sessions',r);break;}
+  case 'revoke-sessions':await api('/account/sessions',{method:'DELETE'});state.modal=null;renderOverlays();toast('Other sessions signed out');break;
+  case 'enable-notifications':if('Notification' in window){const permission=await Notification.requestPermission();toast(permission==='granted'?'Desktop notifications enabled':'Desktop notification permission was not granted');}else toast('Desktop notifications are unavailable in this browser');break;
+  case 'edit-agent':openModal(agent(id)?.type==='bridge'?'connection-settings':'edit-agent',{id});break;
   case 'open-agent-directory':openModal('agent-directory');break;
   case 'open-run-log':openModal('runs');break;
   case 'new-dm':openModal('new-dm');break;
@@ -429,14 +465,15 @@ async function doAction(button,event){const action=button.dataset.action,id=butt
     openModal('create-thread',{channelId:state.selected.id,sourceMessageId:m.id,sourceContent:m.content,sourceAuthorType:m.author_type,sourceAuthorId:m.author_id,name:m.content.replace(/\s+/g,' ').trim().slice(0,120)});break;
   }
   case 'reply-message':{
+    state.menu=null;renderOverlays();
     const m=state.messages.find(m=>m.id===id);if(!m)break;const key=state.selected.type+':'+state.selected.id;state.drafts[key]=`> ${m.content.slice(0,150).replace(/\n/g,' ')}\n\n`+(state.drafts[key]||'');renderMessagesOnly();document.querySelector('#message-input')?.focus();break;
   }
-  case 'copy-message':{const m=state.messages.find(m=>m.id===id);if(m)clipboard(m.content);break;}
+  case 'copy-message':{state.menu=null;renderOverlays();const m=state.messages.find(m=>m.id===id);if(m)clipboard(m.content);break;}
   case 'delete-message':if(!confirm('Delete this message permanently?'))break;await api('/messages/'+id,{method:'DELETE'});await loadMessages();renderMessagesOnly();break;
   case 'react-message':{
     const m=state.messages.find(m=>m.id===id);if(!m)break;const key=state.selected.type+':'+state.selected.id;state.drafts[key]=(state.drafts[key]||'')+'👍';renderMessagesOnly();document.querySelector('#message-input')?.focus();toast('Emoji inserted — reactions are planned for the next iteration');break;
   }
-  case 'composer-add':openModal(state.selected.type==='dm'?'help':'create-thread',{channelId:state.selected.type==='thread'?thread(state.selected.id)?.channel_id:state.selected.id});break;
+  case 'composer-add':openModal(state.selected.type==='dm'?'easy-connect':'create-thread',{channelId:state.selected.type==='thread'?thread(state.selected.id)?.channel_id:state.selected.id});break;
   case 'insert-emoji':case 'insert-mention':{
     const key=state.selected.type+':'+state.selected.id;state.drafts[key]=(state.drafts[key]||'')+(action==='insert-emoji'?'🙂':`@${A()[0]?.name||'agent'} `);renderMessagesOnly();document.querySelector('#message-input')?.focus();break;
   }
@@ -447,7 +484,17 @@ async function doAction(button,event){const action=button.dataset.action,id=butt
 function formValues(form){const values=Object.fromEntries(new FormData(form).entries());for(const check of form.querySelectorAll('input[type=checkbox]'))values[check.name]=check.checked;return values}
 async function submitForm(form,event){event.preventDefault();const kind=form.dataset.form;const values=formValues(form);if(state.busy)return;state.busy=true;const button=form.querySelector('button[type=submit]');if(button)button.disabled=true;
  try{
-  if(kind==='message'){
+  if(kind==='easy-connect'){
+    const r=await api('/agent-connections',{method:'POST',body:{...values,workspaceId:data().workspace.id}});state.modal={kind:'easy-connect',...r};await loadData({keepScroll:true});
+  }else if(kind==='connection-settings'){
+    await api(`/agent-connections/${form.dataset.id}/settings`,{method:'PATCH',body:{...values,timeoutSeconds:Number(values.timeoutSeconds)}});await loadData({keepScroll:true});toast('Agent settings saved');
+  }else if(kind==='preferences'){
+    const patch={...values,fontSize:Number(values.fontSize)};delete patch.workspaceId;await api('/settings',{method:'PATCH',body:patch});await loadData({keepScroll:true});toast('Preferences saved');
+  }else if(kind==='workspace'){
+    await api('/workspace',{method:'PATCH',body:{...values,workspaceId:data().workspace.id}});await loadData({keepScroll:true});toast('Workspace saved');
+  }else if(kind==='password'){
+    await api('/account/password',{method:'POST',body:values});state.modal=null;renderOverlays();toast('Password changed; other sessions signed out');
+  }else if(kind==='message'){
     const text=String(form.querySelector('textarea')?.value||'').trim();if(!text)return;
     const selected={...state.selected},key=selected.type+':'+selected.id;
     await api('/messages',{method:'POST',body:{targetType:selected.type,targetId:selected.id,content:text}});
@@ -479,8 +526,8 @@ async function submitForm(form,event){event.preventDefault();const kind=form.dat
  }catch(err){handleError(err)}finally{state.busy=false;if(button)button.disabled=false}
 }
 function loginScreen(){
- const invite=new URLSearchParams(location.search).get('invite');
- app.innerHTML=`<div class="auth-page"><div class="auth-halo"></div><div class="auth-card"><div class="auth-brand"><span class="brand-large">C</span><div><b>Cord AI</b><small>Humans + agents. One team.</small></div></div><h1>${invite?'Join your team':'Welcome back'}</h1><p>${invite?'Create your account to enter this workspace.':'Your conversations, channels and AI agents in one place.'}</p><form data-form="${invite?'register':'login'}">${invite?field('DISPLAY NAME',input('displayName','','required placeholder="Your name"')):''}${field('USERNAME',input('username','','required autocomplete="username" placeholder="Your username"'))}${field('PASSWORD',`<input class="form-control" type="password" name="password" minlength="${invite?'10':'1'}" required autocomplete="${invite?'new-password':'current-password'}" placeholder="${invite?'10+ characters':'Password'}"/>`)}${invite?`<input type="hidden" name="inviteCode" value="${attr(invite)}"/>`:''}<button type="submit" class="button-primary full">${invite?'Create Account':'Sign In'}</button></form><div class="auth-foot">No Discord account required · Your own workspace</div></div></div>`;
+ const invite=new URLSearchParams(location.search).get('invite'),registering=!!invite||state.setupRequired;
+ app.innerHTML=`<div class="auth-page"><div class="auth-halo"></div><div class="auth-card"><div class="auth-brand"><span class="brand-large">C</span><div><b>Cord AI</b><small>Humans + agents. One team.</small></div></div><h1>${registering?'Join your team':'Welcome back'}</h1><p>${registering?'Create your account to enter this workspace.':'Your conversations, channels and AI agents in one place.'}</p><form data-form="${registering?'register':'login'}">${registering?field('DISPLAY NAME',input('displayName','','required placeholder="Your name"')):''}${field('USERNAME',input('username','','required autocomplete="username" placeholder="Your username"'))}${field('PASSWORD',`<input class="form-control" type="password" name="password" minlength="${registering?'10':'1'}" required autocomplete="${registering?'new-password':'current-password'}" placeholder="${registering?'10+ characters':'Password'}"/>`)}${registering?`<input type="hidden" name="inviteCode" value="${attr(invite||'')}"/>`:''}<button type="submit" class="button-primary full">${registering?'Create Account':'Sign In'}</button></form><div class="auth-foot">No Discord account required · Your own workspace</div></div></div>`;
 }
 let onRefresh=null;
 document.addEventListener('contextmenu',event=>{
@@ -509,10 +556,12 @@ document.addEventListener('keydown',event=>{
  }
  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();openSearch()}
  if((event.ctrlKey||event.metaKey)&&event.key===','){event.preventDefault();openSettings()}
- if(event.target.id==='message-input'&&event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();event.target.closest('form')?.requestSubmit()}
+ if(event.target.id==='message-input'&&event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&(data().settings?.enterToSend!==false||event.ctrlKey||event.metaKey)){event.preventDefault();event.target.closest('form')?.requestSubmit()}
 });
 async function start(){
  try{
+  const config=await api('/auth/config');state.setupRequired=config.setupRequired;
+  if(state.setupRequired){loginScreen();return}
   if(new URLSearchParams(location.search).has('invite')){loginScreen();return}
   let r;try{r=await api('/me')}catch(err){
     try{await api('/auth/demo',{method:'POST',body:{}});r=await api('/me')}catch{loginScreen();return}
@@ -521,4 +570,9 @@ async function start(){
   await loadData();onRefresh=initEvents();if(current())markRead(state.selected.type,state.selected.id);
  }catch(err){console.error(err);app.innerHTML=`<div class="error-start"><h1>Couldn't load Cord AI</h1><p>${esc(err.message)}</p><button onclick="location.reload()">Retry</button></div>`}
 }
+setInterval(()=>{
+ if(document.hidden||state.busy||!state.data)return;
+ const watching=['agent-directory','connection-settings'].includes(state.modal?.kind)||(state.modal?.kind==='easy-connect'&&state.modal.prompt)||(state.screen==='settings'&&['agents','runs','security'].includes(state.selectedSettings));
+ if(watching)loadData({messages:false,keepScroll:true}).catch(handleError);
+},15_000);
 start();

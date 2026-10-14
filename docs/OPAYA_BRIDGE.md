@@ -1,72 +1,63 @@
-# Cord AI ↔ OPAYA bridge contract (v1)
+# Cord ↔ OPAYA bridge v2
 
-## Actual integration status
+## Connect
 
-**Verified:** The OPAYA Desktop source is in [`trbojevicstefan/agenthub`](https://github.com/trbojevicstefan/agenthub). Its `desktop/adapters/` and other Electron modules support different local/remote agent runtimes, including agents on VPS / SSH / Docker. It has its own secrets and agent session state.
+In Cord, choose **Connect Agent**, select a runtime and copy the prompt. The agent downloads `/bridge/install.mjs` and runs it with `--server`, `--pair`, and `--runtime`. The installer downloads `/bridge/bundle.json`, checks its version, bounded paths and SHA-256 checksums, and installs source under `~/.cord/runtimes/<digest>/` (or `CORD_HOME`). Remote downloads require HTTPS; HTTP is allowed only on loopback.
 
-**Not verified:** A public, stable OPAYA Desktop HTTP API for multi-user remote execution. Cord **does not access OPAYA Electron IPC or your local Vault**. The `opaya` connector presently implements an outbound **signed HTTP protocol** for a separately operated bridge. An integration adapter must be built or deployed against a supported OPAYA runtime interface for genuine local OPAYA sessions. The demo connector is explicitly simulated.
+OPAYA discovery locates runtimes. The adapter handshake is checked before consuming the pairing code. Enrollment exchanges a 15-minute single-use code for a device token; Cord stores only hashes. The local connection file is private (0600 where supported) and must not be committed. The installer starts a background worker and prints management commands. Pairing verifies connectivity; a completed conversation verifies model access.
 
-## Request
+| Choice | Transport | Credentials and permissions |
+| --- | --- | --- |
+| Claude Code | OPAYA stream-json adapter, CLI resume | Local Claude login, native headless policy |
+| Codex | OPAYA app-server adapter | Local Codex login, approvals in Cord |
+| Hermes | OPAYA ACP or configured gateway | Hermes profile; ACP approvals in Cord |
+| OpenClaw | OPAYA HTTP/SSE gateway, stable session key | Local gateway token, or `--token-env NAME` |
+| OPAYA | Authenticated local session service | Selected agent, Vault, MCP, machine/container configuration and native approvals |
 
-`POST https://your-bridge.example/invoke`
+For native OPAYA, keep Desktop running and use **Home → Connect to Cord AI**. Each Cord conversation maps to a separate OPAYA chat. Without its local service the CLI can invoke a compatible saved definition directly; remote/API credentials may then need `--token-env NAME`.
 
-Required headers:
+AgentHub includes `npm run cord:connect -- ...`, reusing `desktop/adapters/` directly. Cord distributes pinned source so users need neither Git nor an OPAYA checkout. `bridge/vendor/opaya/SOURCE.json` records provenance. Vault databases, user profiles and credentials are never bundled.
 
-```http
-Content-Type: application/json
-X-Cord-Signature: sha256=<lowercase hex HMAC-SHA256 of raw UTF-8 request body>
+## Management
+
+The installer prints exact paths for these commands:
+
+```sh
+node /path/to/runner.cjs --config /path/to/connection.json --status
+node /path/to/runner.cjs --config /path/to/connection.json --stop
+node /path/to/runner.cjs --config /path/to/connection.json --start
 ```
 
-Example body:
+`--list` discovers installations and OPAYA IDs. `--opaya-profile DIR` selects a profile; `--opaya-agent ID` selects an agent. `--cwd DIR` fixes the local folder. `--endpoint URL` and `--token-env NAME` support explicit gateways. Gateway credentials remain in the private local config. Logs, lock, status and session mappings live beside it.
 
-```json
-{
-  "version": "cord-bridge/1",
-  "agentId": "your-opaya-runtime-agent-id",
-  "threadId": "thread-123",
-  "sessionId": "thread-123",
-  "messages": [
-    {"id": "msg-1", "role": "user", "content": "Plan this feature"}
-  ],
-  "message": "Plan this feature"
-}
-```
+The worker runs until stopped, revoked, its runtime exits, or the computer restarts. After reboot use `--start` or your user service manager; login startup is not installed automatically. A local lock prevents duplicate processes for one connection.
 
-`agentId` is the `externalId` specified in the Cord connector config, falling back to Cord's internal agent ID. `sessionId` is the conversation target ID so the same thread consistently maps to a logical agent conversation. In a DM it is the DM ID.
+## Protocol
 
-## Response
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/agent-connections` | Admin generates/replaces a pairing prompt |
+| `POST /api/bridge/enroll` | Consumes a code, returns device token once |
+| `POST /api/bridge/poll` | Claims one queued job per agent |
+| `POST /api/bridge/jobs/:id/heartbeat` | Renews 45-second lease and reports progress |
+| `POST /api/bridge/jobs/:id/complete` | Atomic, idempotent reply delivery |
+| `POST /api/bridge/jobs/:id/approval` | Requests Codex/ACP tool permission |
+| `GET /api/bridge/jobs/:id/approval-status` | Reads approval decisions |
+| `POST /api/approvals/:id` | Authorized admin approves once or declines |
+| `POST /api/runs/:id/cancel` | Cancels queued/running paired-agent jobs |
 
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
+Connection settings, pause, revoke and test use action paths under `/api/agent-connections/:id/`.
 
-{"reply":"Your response in plain text or Markdown."}
-```
+History, jobs and sessions are scoped to their source workspace and conversation. Device tokens access only their identity’s claimed jobs. Agent replies never invoke another agent. DM history, runs and approvals require conversation access.
 
-Non-2xx responses and malformed/missing reply payloads cause a failed run. The initial adapter has a 45-second timeout, disallows redirects, sends a bounded history (20 messages), and does not stream partial output. The connector must supply a **shared secret**; Cord encrypts it at rest using AES-256-GCM and `CORD_MASTER_KEY`.
+Offline jobs survive server restarts for up to 24 hours. Lost running leases fail with a diagnostic and are not replayed automatically: a tool may already have executed. Result-delivery retries do not execute the task again. Late output after cancellation/revocation is rejected. Session mappings persist across worker restarts. Provider login, key, plan or gateway failures appear in runtime output or execution logs. Native scoped cancellation requires the updated OPAYA service; with older versions Cord ignores late output but asks you to verify the local task instead of stopping an unrelated OPAYA turn.
 
-## Bridge responsibilities
+## Hosting
 
-1. Validate `X-Cord-Signature` with a timing-safe comparison *before* processing or logging the payload. Enforce TLS in production, network ACLs and rate limits. Store secrets in a Vault, not in Cord messages.
-2. Map the approved `agentId` to a **specific** OPAYA local/SSH/Docker runtime configured by the operator. Reject unknown agents; do not treat the ID as an executable command.
-3. Persist session mapping `(Cord workspace, Cord thread/DM, OPAYA agent session)`. Version 1 provides `threadId` and `sessionId` only; adding explicit `workspaceId`, correlation IDs and idempotency should be part of v2.
-4. Invoke that runtime through a **documented/approved** OPAYA IPC/service API or through the agent's supported ACP/OpenAI API. Do not expose desktop shell, SSH keys, Vault secrets or shared arbitrary tool execution through an unauthenticated HTTP endpoint.
-5. Return `{ "reply": string }`. Track timeouts and transient errors. There is no reliable end-to-end tool execution approval in this MVP.
+Set `CORD_PUBLIC_ORIGIN` to the HTTPS address reachable by agents. Localhost prompts work only on the same computer. Workers need outbound access to Cord and their model service; no desktop IPC or Vault API is exposed over the network. OPAYA’s socket stays local and authenticated.
 
-## Set up in the UI
+Cord generates `data/master.key` when no `CORD_MASTER_KEY` is supplied. Legacy connector keys remain AES-256-GCM encrypted. Back up the encryption key with SQLite, or provide a stable 64-hex-character environment key.
 
-1. Run Cord locally and set `CORD_MASTER_KEY` in `.env` (64 hex digits).
-2. Open **AI Agent Directory → Connect New Agent → OPAYA Bridge**.
-3. Enter display name, bridge HTTPS URL, external OPAYA agent ID and a strong shared secret.
-4. Create or edit a thread; assign that agent and select `Auto` or `Mentions only`.
-5. Write from a human account. Inspect the response and **Agent Runs** to confirm.
+## Legacy v1
 
-For loopback development, `http://127.0.0.1:<port>` is permitted only when in demo mode. Production must use HTTPS and include the host in `CORD_AGENT_ALLOWED_HOSTS`.
-
-## MVP vs future adapters
-
-- **Implemented**: OpenAI-compatible chat-completions and signed synchronous HTTP bridge/webhooks.
-- **Possible future adapters**: OPAYA native via audited localhost service, ACP agent transport, A2A agent protocol, OpenAI Responses/Agents SDK, Claude SDK, Gemini, Hermes/OpenClaw, LangGraph, CrewAI, n8n workflows and MCP tool calls. Each needs its own adapter / gateway; there is no single API that universally connects every existing agent.
-- **Not included**: automatic agent discovery, approval gates for tools, streaming/token metering, per-provider OAuth, headless OPAYA install, registry import, or multi-agent handoffs.
-
-The API contract can evolve toward `AgentAdapter { discover, connect, send, cancel, capabilities }` once real runtime integrations are available.
+Advanced `opaya` and `webhook` connectors still POST `cord-bridge/1` payloads to an exact URL with external `agentId`, target-based `threadId`/`sessionId`, history and latest message. They use `X-Cord-Signature: sha256=<HMAC-SHA256(raw body)>` and expect `{"reply":"..."}`. HTTPS, host allowlist and the 45-second timeout still apply. Prefer v2 pairing for new local agents.
