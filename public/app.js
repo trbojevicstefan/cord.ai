@@ -1,5 +1,7 @@
 import { icon } from './icons.js';
 import { createConnectionViews } from './connections.js';
+import { createOperatorPanel } from './operator.js';
+import { createGuidance } from './guidance.js';
 
 const app=document.querySelector('#app');
 const state={data:null,selected:{type:'channel',id:'channel-chat'},messages:[],dmView:false,screen:'chat',modal:null,menu:null,profile:null,selectedSettings:'account',searchOpen:false,searchResults:[],searchQuery:'',sidebarOpen:true,memberPanel:true,collapsed:new Set(),hideMuted:false,showArchived:false,threadShow:'all',drafts:{},typing:{},lastSelection:'',toast:null,busy:false,returnScreen:'chat'};
@@ -25,6 +27,8 @@ const category=id=>K().find(x=>x.id===id);
 const dm=id=>D().find(x=>x.id===id);
 const prefs=(type,id)=>data().preferences?.find(x=>x.target_type===type&&x.target_id===id)||{muted:0,favorite:0,notification_level:'all'};
 const admin=()=>['owner','admin'].includes(member(me().id)?.role);
+const operator=createOperatorPanel({api,icon,esc,getData:data,isAdmin:admin,onWorkspaceChanged:()=>loadData({keepScroll:true}),onError:handleError});
+const guidance=createGuidance({api,getData:data,isAdmin:admin,onError:handleError,onAction:action=>{if(action==='operator'){void operator.open();return}const map={channel:'create-channel',thread:'create-thread',agent:'connect-agent',dm:'goto-dm',runs:'open-run-log',invite:'show-invite',settings:'open-settings'};if(map[action])void doAction({dataset:{action:map[action]}},{})}});
 const avatar=(item,size=32,kind='human')=>`<span class="avatar ${kind==='agent'?'avatar-agent':''}" style="--avatar-color:${esc(item?.color||'#5865f2')};width:${size}px;height:${size}px;min-width:${size}px;font-size:${Math.round(size*.34)}px" title="${esc(item?.display_name||item?.name||'User')}">${esc(item?.avatar||item?.display_name?.split(' ').map(s=>s[0]).join('').slice(0,2)||item?.name?.slice(0,2)||'?')}<i class="presence ${esc(item?.status||'online')}"></i></span>`;
 const userName=(type,id)=>type==='agent'?agent(id)?.name:type==='system'?'Cord AI':member(id)?.display_name||'Unknown';
 const getAuthor=(type,id)=>type==='agent'?agent(id):type==='system'?{avatar:'C',color:'#5865f2',name:'Cord AI',status:'online'}:member(id);
@@ -50,6 +54,7 @@ async function loadData({messages=true,keepScroll=false}={}){
   }
   if(messages&&current()){await loadMessages();if(keepScroll&&previousMessages.size&&document.hidden){const incoming=state.messages.filter(m=>!previousMessages.has(m.id)&&m.author_id!==me().id&&m.author_type!=='system');const pref=prefs(state.selected.type,state.selected.id);if(incoming.length&&!pref.muted&&pref.notification_level!=='none'&&(pref.notification_level!=='mentions'||incoming.some(m=>m.content.toLowerCase().includes('@'+me().username.toLowerCase())))){const last=incoming.at(-1);if(result.settings.desktopNotifications&&'Notification' in window&&Notification.permission==='granted')new Notification(userName(last.author_type,last.author_id),{body:last.content.slice(0,160),tag:state.selected.id});if(result.settings.notificationSound){try{const Audio=window.AudioContext||window.webkitAudioContext;const audio=new Audio(),tone=audio.createOscillator(),gain=audio.createGain();tone.connect(gain);gain.connect(audio.destination);gain.gain.value=.035;tone.frequency.value=660;tone.start();tone.stop(audio.currentTime+.12);tone.onended=()=>audio.close();}catch{}}}}}
   render({keepScroll});
+  guidance.maybeStart();
 }
 async function loadMessages(){
   if(!current()){state.messages=[];return}
@@ -104,7 +109,7 @@ function serverRail(){
     <button class="rail-item rail-new" data-action="connect-agent" title="Connect agent">${icon('plus',24)}</button>
     <div class="rail-rule"></div>
     <button class="rail-item rail-explore" data-action="show-invite" title="Invite team">${icon('users',22)}</button>
-  </div><div class="rail-bottom"><button class="rail-help" data-action="show-help" title="Help">${icon('info',21)}</button></div></aside>`;
+  </div><div class="rail-bottom">${admin()?`<button class="rail-help" data-action="open-operator" title="Cord Operator · Ctrl/⌘+Shift+O">${icon('sparkles',21)}</button>`:''}<button class="rail-help" data-action="show-help" title="Help">${icon('info',21)}</button></div></aside>`;
 }
 function catLabel(cat){const collapsed=state.collapsed.has(cat.id);return `<div class="category-row" data-context="category" data-id="${cat.id}">
     <button class="category-title" data-action="toggle-category" data-id="${cat.id}">${icon('down',11,collapsed?'rotate-minus':'')}<span>${esc(cat.name)}</span></button>
@@ -137,7 +142,7 @@ function sidebar(){
   return `<aside class="channel-panel ${state.sidebarOpen?'':'mobile-hidden'}">
     <div class="workspace-top"><button class="workspace-switcher" data-action="workspace-menu">${esc(data().workspace?.name||'Cord AI Team')} ${icon('down',14)}</button><button class="invite-people" data-action="show-invite" title="Invite people">${icon('friends',19)}</button></div>
     <div class="sidebar-scroll" data-context="sidebar">
-      <div class="quick-links"><button data-action="open-agent-directory">${icon('bot',19)}<span>AI Agent Directory</span><small>${A().length}</small></button><button data-action="open-run-log">${icon('terminal',18)}<span>Agent Runs</span></button></div>
+      <div class="quick-links"><button data-action="open-agent-directory">${icon('bot',19)}<span>AI Agent Directory</span><small>${A().length}</small></button>${admin()?`<button data-action="open-operator">${icon('sparkles',18)}<span>Cord Operator</span><small>LLM</small></button>`:''}<button data-action="open-run-log">${icon('terminal',18)}<span>Agent Runs</span></button></div>
       <div class="sidebar-divider"></div>
       ${K().map(cat=>`${catLabel(cat)}${state.collapsed.has(cat.id)?'':`<div class="cat-channels">${C().filter(c=>c.category_id===cat.id).map(channelRow).join('')}</div>`}`).join('')}
       ${C().filter(c=>!c.category_id).map(channelRow).join('')}
@@ -223,7 +228,7 @@ function threadEditor(){
 const settingSections=[
   {title:'USER SETTINGS',items:[['account','Account','user'],['privacy','Data & Privacy','shield'],['notifications','Notifications','bell']]},
   {title:'EXPERIENCE',items:[['appearance','Appearance','eye'],['messaging','Messaging','message-circle'],['shortcuts','Keyboard Shortcuts','terminal']]},
-  {title:'TEAM & AI',items:[['agents','Connected Agents','bot'],['runs','Agent Runs','terminal'],['security','Security & Access','shield-check']]}
+  {title:'TEAM & AI',items:[['agents','Connected Agents','bot'],['operator','Cord Operator','sparkles'],['runs','Agent Runs','terminal'],['security','Security & Access','shield-check']]}
 ];
 function settingsView(){
   return `<div class="settings-layout"><aside class="settings-sidebar"><div class="settings-sidebar-content"><div class="settings-identity">${avatar(me(),36)}<span><b>${esc(me().display_name)}</b><small>${esc(me().username)}</small></span></div><button class="settings-search" data-action="settings-search">${icon('search',18)} Search settings</button>
@@ -245,7 +250,8 @@ function preferenceSettings(section){
 }
 function securitySettings(){return `<div class="settings-page-title">Security & Access</div><div class="settings-section"><h2>Agent Permissions</h2><p class="muted-paragraph">Only workspace admins can pair, configure, or disconnect agents. Agent messages never trigger other agents. Codex and Hermes ACP tool requests appear here for approval; Claude Code uses its configured native permissions. A bridge can only claim jobs for its paired identity.</p>${connections.approvals(data().approvals||[])}<button class="button-secondary" data-action="show-sessions">Manage My Sessions</button></div><div class="settings-section"><h2>Connected Devices</h2>${connections.cards()}</div>`;}
 function settingsContent(){const page=preferenceSettings(state.selectedSettings);if(page)return page;switch(state.selectedSettings){
- case 'agents':return `<div class="settings-page-title">Connected Agents</div><div class="settings-section"><p class="muted-paragraph">Your local agents, connected to the team with one prompt.</p>${connections.cards()}${admin()?'<button class="button-primary" data-action="connect-agent">Connect Agent</button>':''}</div>`;
+  case 'operator':return `<div class="settings-page-title">Cord Operator</div><div class="settings-section"><h2>Bring your own LLM</h2><p class="muted-paragraph">Connect OpenAI, Claude, OpenRouter, Groq, Gemini or an OpenAI-compatible model. The Operator can read public team context and propose workspace changes, but every mutation needs your approval.</p><button class="button-primary" data-action="open-operator">Open Cord Operator</button></div>`;
+  case 'agents':return `<div class="settings-page-title">Connected Agents</div><div class="settings-section"><p class="muted-paragraph">Your local agents, connected to the team with one prompt.</p>${connections.cards()}${admin()?'<button class="button-primary" data-action="connect-agent">Connect Agent</button>':''}</div>`;
  case 'runs':return `<div class="settings-page-title">Agent Runs & Approvals</div>${connections.approvals(data().approvals||[])}${connections.runs(data().runs||[])}`;
  case 'security':return securitySettings();
  default:return preferenceSettings('account');
@@ -347,6 +353,7 @@ function render({keepScroll=false}={}){
   app.innerHTML=(state.screen==='edit-thread'?threadEditor():state.screen==='settings'?settingsView():chatShell())+'<div id="overlays"></div>';
   renderOverlays(savedForm);const scroller=document.querySelector('#chat-scroll');if(scroller){if(changed||oldBottom||!keepScroll)scroller.scrollTop=scroller.scrollHeight;else scroller.scrollTop=oldTop}
   if(state.modal?.kind==='create-thread')requestAnimationFrame(()=>app.querySelector('.modal [autofocus]')?.focus());
+  guidance.afterRender();
 }
 function renderMessagesOnly(){if(state.screen!=='chat')return;const old=document.querySelector('.conversation-area'),scroll=document.querySelector('#chat-scroll');if(!old)return;
  const wasBottom=scroll?scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<100:true;const top=scroll?.scrollTop||0;
@@ -452,7 +459,9 @@ async function doAction(button,event){const action=button.dataset.action,id=butt
   case 'settings-section':state.selectedSettings=button.dataset.section;render();break;
   case 'settings-search':openSearch();break;
   case 'show-friends':openModal('new-dm');break;
-  case 'show-help':openModal('help');break;
+  case 'show-help':guidance.openHelp();break;
+  case 'start-tour':guidance.openTour();break;
+  case 'open-operator':void operator.open();break;
   case 'logout':await api('/auth/logout',{method:'POST',body:{}});window.location.reload();break;
   case 'search':openSearch();break;
   case 'search-go':state.searchOpen=false;selectTarget(type,id);break;
@@ -549,6 +558,8 @@ document.addEventListener('input',event=>{
  }
 });
 document.addEventListener('keydown',event=>{
+ if(event.key==='F1'){event.preventDefault();guidance.openHelp();return}
+ if((event.ctrlKey||event.metaKey)&&event.shiftKey&&event.key.toLowerCase()==='o'){event.preventDefault();void operator.open();return}
  if(event.key==='Escape'){
    if(state.searchOpen||state.modal||state.menu||state.profile){closeTransient();return}
    if(state.screen==='edit-thread'){state.screen='chat';render();return}

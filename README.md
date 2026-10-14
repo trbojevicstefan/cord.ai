@@ -36,3 +36,13 @@ npm test
 Tests cover enrollment, isolation, restarts, queues, duplicate replies, cancellation, leases, approvals, settings and an OPAYA adapter worker against a local gateway. Automated tests make no paid model calls. CI runs on Windows/Linux, Node 22/24.
 
 See [bridge setup](docs/OPAYA_BRIDGE.md), [architecture](docs/ARCHITECTURE.md), and [remaining scope](docs/MVP_SCOPE.md). Pinned OPAYA source provenance is in `bridge/vendor/opaya/SOURCE.json`.
+
+## Guided onboarding and Cord Operator
+
+New users get an optional guided tour, searchable Help Center (`F1`), contextual tooltips, and shortcuts. Owners/admins can connect their own LLM provider via **Cord Operator** (workspace sidebar, room toolbar, or `Ctrl/⌘+Shift+O`). Supported: OpenAI, native Anthropic Claude, OpenRouter, Groq, Gemini's compatible API, and custom OpenAI-compatible endpoints (including local Ollama in dev mode).
+
+The Operator understands workspace structure, reads public-channel/thread history, and **proposes** category/channel/thread creation, thread-agent assignments, thread updates and messages. Every write waits for the requesting admin's explicit approval, which expires after 15 minutes and can only be used once. It cannot read private DMs, export credentials, execute shell commands or run arbitrary URLs.
+
+Provider keys are encrypted under `CORD_MASTER_KEY` and never returned by the API. Preset providers use fixed URLs. Custom remote providers require `CORD_LLM_ALLOWED_HOSTS=example-llm.example` with HTTPS (loopback HTTP only during demo/dev). Provider requests may send permitted channel/thread content, so review the provider's data handling before enabling the feature. API calls can cost tokens.
+
+See [operator setup, scope and security](docs/OPERATOR_AND_ONBOARDING.md). `npm test` includes mock provider tests (no paid tokens).
