@@ -6,6 +6,7 @@ import { resolve, extname, join, dirname, relative, isAbsolute, sep } from 'node
 import { randomBytes, createHash } from 'node:crypto';
 import { createDatabase, hashPassword, verifyPassword, uid, now } from './database.mjs';
 import { createSocial } from './social.mjs';
+import { createAccess } from './access.mjs';
 import { createNotifications } from './notifications.mjs';
 import { encryptSecret, assertEndpoint, invokeAgent } from './agents.mjs';
 import { createBridge } from './bridge.mjs';
@@ -33,6 +34,7 @@ async function bodyJSON(req) {
 export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'data','cord.db'), demo=isDemo() }={}) {
   const store=createDatabase(databasePath,{demo});
   const {get,all,run}=store;
+  const access=createAccess({store,requireWorkspace,requireAdmin,audit,broadcast,bodyJSON,asJSON});
   const listeners=new Set(), pendingAgents=new Set(), throttles=new Map();
   function broadcast(workspaceId, kind='change', payload={}, dmId=null){
     if(kind==='agent-approval'){try{notifications.onApproval(workspaceId,payload)}catch(error){console.error('Approval notification failed:',error)}return;}
@@ -41,6 +43,8 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     for(const client of listeners){
       if(client.workspaceId!==workspaceId)continue;
       if(dmId && !canReadTarget(client.userId,'dm',dmId))continue;
+      if(payload.scope && ['channel','thread'].includes(payload.scope) && payload.id && !canReadTarget(client.userId,payload.scope,payload.id))continue;
+      if(payload.targetType && ['channel','thread','dm'].includes(payload.targetType) && payload.targetId && !canReadTarget(client.userId,payload.targetType,payload.targetId))continue;
       try{client.res.write(out)}catch{listeners.delete(client)}
     }
   }
@@ -67,15 +71,15 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
   function requireWorkspace(userId,workspaceId){const ws=workspaceId?get('SELECT * FROM workspaces WHERE id=?',workspaceId):workspaceFor(userId);if(!ws||!membership(userId,ws.id))throw failure(403,'Not a member of this workspace');return ws}
   function requireAdmin(userId,workspaceId){const m=membership(userId,workspaceId);if(!isAdmin(m))throw failure(403,'Only workspace admins can perform this action');return m}
   function canReadTarget(userId,type,id){
-    if(type==='channel'){const c=get('SELECT workspace_id FROM channels WHERE id=?',id);return !!c&&!!membership(userId,c.workspace_id)}
-    if(type==='thread'){const t=get('SELECT workspace_id FROM threads WHERE id=?',id);return !!t&&!!membership(userId,t.workspace_id)}
+    if(type==='channel'){const c=get('SELECT workspace_id FROM channels WHERE id=?',id);return !!c&&access.allowed(userId,id)}
+    if(type==='thread'){const t=get('SELECT workspace_id,channel_id FROM threads WHERE id=?',id);return !!t&&access.allowed(userId,t.channel_id)}
     if(type==='dm'){const d=get('SELECT * FROM dms WHERE id=?',id);return !!d && (d.user_id===userId||d.participant_user_id===userId)}
     return false;
   }
   function targetWorkspace(userId,type,id){
     if(!['channel','thread','dm'].includes(type))throw failure(400,'Unknown target type');
     const t=get(`SELECT * FROM ${type==='channel'?'channels':type==='thread'?'threads':'dms'} WHERE id=?`,id);
-    if(!t||!membership(userId,t.workspace_id) || (type==='dm'&&!canReadTarget(userId,type,id)))throw failure(404,'Conversation not found');
+    if(!t||!membership(userId,t.workspace_id)||!canReadTarget(userId,type,id))throw failure(404,'Conversation not found');
     return t;
   }
   function recordMessage(ws,type,id,authorType,authorId,content,metadata={}){
@@ -183,6 +187,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     }
     const user=sessionUser(req);
     if(!user)throw failure(401,'Please sign in');
+    if(await access.api(req,res,url,user))return;
     if(await notifications.api(req,res,url,user))return;
     if(await social.api(req,res,url,user))return;
     if(await bridge.api(req,res,url,user)||await settings.api(req,res,url,user)||await operator.api(req,res,url,user))return;
@@ -190,13 +195,13 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     if(pathname==='/api/me'&&req.method==='GET')return asJSON(res,200,{ok:true,user,demo});
     if(pathname==='/api/bootstrap'&&req.method==='GET'){
       const ws=requireWorkspace(user.id,url.searchParams.get('workspaceId'));
-      const categories=all('SELECT * FROM categories WHERE workspace_id=? ORDER BY position,name',ws.id), channels=all('SELECT * FROM channels WHERE workspace_id=? ORDER BY position,name',ws.id);
-      const threads=all('SELECT * FROM threads WHERE workspace_id=? ORDER BY updated_at DESC',ws.id);
+      const categories=all('SELECT * FROM categories WHERE workspace_id=? ORDER BY position,name',ws.id), channels=all('SELECT * FROM channels WHERE workspace_id=? ORDER BY position,name',ws.id).filter(c=>access.allowed(user.id,c.id));
+      const threads=all('SELECT * FROM threads WHERE workspace_id=? ORDER BY updated_at DESC',ws.id).filter(t=>access.allowed(user.id,t.channel_id));
       const agents=all('SELECT id,workspace_id,name,avatar,color,description,type,status,endpoint,model,external_id,created_at FROM agents WHERE workspace_id=? ORDER BY name',ws.id).map(bridge.view);
       const members=all('SELECT u.id,u.display_name,u.username,u.avatar,u.color,u.status,m.role FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.workspace_id=? ORDER BY u.display_name',ws.id);
       const dms=all('SELECT * FROM dms WHERE workspace_id=? AND (user_id=? OR participant_user_id=?) ORDER BY created_at DESC',ws.id,user.id,user.id);
-      const preferences=all('SELECT * FROM preferences WHERE user_id=?',user.id);
-      const reads=all('SELECT * FROM reads WHERE user_id=?',user.id);
+      const preferences=all('SELECT * FROM preferences WHERE user_id=?',user.id).filter(p=>p.target_type==='category'||canReadTarget(user.id,p.target_type,p.target_id));
+      const reads=all('SELECT * FROM reads WHERE user_id=?',user.id).filter(r=>canReadTarget(user.id,r.target_type,r.target_id));
       const runs=all('SELECT r.id,r.agent_id,r.target_type,r.target_id,r.status,r.error,r.created_at,r.finished_at,j.progress FROM runs r LEFT JOIN bridge_jobs j ON j.id=r.id WHERE r.workspace_id=? ORDER BY r.rowid DESC LIMIT 50',ws.id).filter(r=>canReadTarget(user.id,r.target_type,r.target_id));
       return asJSON(res,200,{ok:true,user,workspace:ws,categories,channels,threads,members,agents,dms,preferences,reads,runs,unreads:social.unreadSummary(user.id,ws.id),notificationSummary:notifications.summary(user.id,ws.id),demo,settings:settings.view(user.id),workspaces:all('SELECT w.* FROM workspaces w JOIN memberships m ON m.workspace_id=w.id WHERE m.user_id=?',user.id),approvals:bridge.approvals(user,ws.id)});
     }
@@ -216,6 +221,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     if(pathname==='/api/messages'&&req.method==='POST'){
       const input=await bodyJSON(req);const type=cut(input.targetType,20),id=cut(input.targetId,100),content=cut(input.content,24000);
       const target=targetWorkspace(user.id,type,id);
+      if(type!=='dm'&&!access.allowed(user.id,type==='thread'?target.channel_id:id,'post'))throw failure(403,'You cannot send messages here');
       const prepared=social.prepareMessage(user.id,target,type,id,input);
       if(type==='thread'){
         if(target.archived)throw failure(403,'This thread is closed');
@@ -243,7 +249,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     if(pathname==='/api/search'&&req.method==='GET'){
       const ws=requireWorkspace(user.id,url.searchParams.get('workspaceId'));const q=cut(url.searchParams.get('q'),80);
       if(q.length<2)return asJSON(res,200,{ok:true,messages:[]});
-      const matches=all('SELECT * FROM messages WHERE workspace_id=? AND content LIKE ? ORDER BY created_at DESC LIMIT 60',ws.id,`%${q.replace(/[%_]/g,'')}%`).filter(m=>m.target_type!=='dm'||canReadTarget(user.id,'dm',m.target_id));
+      const matches=all('SELECT * FROM messages WHERE workspace_id=? AND content LIKE ? ORDER BY created_at DESC LIMIT 60',ws.id,`%${q.replace(/[%_]/g,'')}%`).filter(m=>canReadTarget(user.id,m.target_type,m.target_id));
       return asJSON(res,200,{ok:true,messages:matches});
     }
     if(pathname==='/api/categories'&&req.method==='POST'){
@@ -252,7 +258,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     const categoryRoute=pathname.match(/^\/api\/categories\/([^/]+)$/);
     if(categoryRoute&&['PATCH','DELETE'].includes(req.method)){
       const c=get('SELECT * FROM categories WHERE id=?',categoryRoute[1]);if(!c)throw failure(404,'Category not found');requireWorkspace(user.id,c.workspace_id);requireAdmin(user.id,c.workspace_id);
-      if(req.method==='DELETE'){run('DELETE FROM preferences WHERE target_type=? AND target_id=?','category',c.id);run('DELETE FROM categories WHERE id=?',c.id)}else{const input=await bodyJSON(req);run('UPDATE categories SET name=?,position=? WHERE id=?',cut(input.name??c.name,70),Number.isInteger(input.position)?input.position:c.position,c.id)}
+      if(req.method==='DELETE'){access.cleanupScope('category',c.id);run('DELETE FROM preferences WHERE target_type=? AND target_id=?','category',c.id);run('DELETE FROM categories WHERE id=?',c.id)}else{const input=await bodyJSON(req);run('UPDATE categories SET name=?,position=? WHERE id=?',cut(input.name??c.name,70),Number.isInteger(input.position)?input.position:c.position,c.id)}
       audit(user.id,c.workspace_id,`category.${req.method.toLowerCase()}`,'category',c.id);broadcast(c.workspace_id);return asJSON(res,200,{ok:true});
     }
     if(pathname==='/api/channels'&&req.method==='POST'){
@@ -263,7 +269,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     const channelRoute=pathname.match(/^\/api\/channels\/([^/]+)$/);
     if(channelRoute&&['PATCH','DELETE'].includes(req.method)){
       const c=get('SELECT * FROM channels WHERE id=?',channelRoute[1]);if(!c)throw failure(404,'Channel not found');requireWorkspace(user.id,c.workspace_id);requireAdmin(user.id,c.workspace_id);
-      if(req.method==='DELETE'){for(const t of all('SELECT id FROM threads WHERE channel_id=?',c.id))purgeConversation('thread',t.id);purgeConversation('channel',c.id);run('DELETE FROM channels WHERE id=?',c.id)}else{
+      if(req.method==='DELETE'){access.cleanupScope('channel',c.id);for(const t of all('SELECT id FROM threads WHERE channel_id=?',c.id))purgeConversation('thread',t.id);purgeConversation('channel',c.id);run('DELETE FROM channels WHERE id=?',c.id)}else{
         const input=await bodyJSON(req);const cat=input.categoryId===null?null:(input.categoryId??c.category_id);
         if(cat&&!get('SELECT id FROM categories WHERE id=? AND workspace_id=?',cat,c.workspace_id))throw failure(404,'Category not found');
         run('UPDATE channels SET name=?,description=?,category_id=? WHERE id=?',cut(input.name??c.name,60),cut(input.description??c.description,400),cat,c.id);
@@ -271,7 +277,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
       audit(user.id,c.workspace_id,`channel.${req.method.toLowerCase()}`,'channel',c.id);broadcast(c.workspace_id);return asJSON(res,200,{ok:true});
     }
     if(pathname==='/api/threads'&&req.method==='POST'){
-      const input=await bodyJSON(req);const channel=targetWorkspace(user.id,'channel',cut(input.channelId,100));const name=cut(input.name,120);if(name.length<2)throw failure(400,'Thread name must have at least 2 characters');
+      const input=await bodyJSON(req);const channel=targetWorkspace(user.id,'channel',cut(input.channelId,100));if(!access.allowed(user.id,channel.id,'post'))throw failure(403,'You cannot create threads here');const name=cut(input.name,120);if(name.length<2)throw failure(400,'Thread name must have at least 2 characters');
       const agent=input.agentId?get('SELECT id FROM agents WHERE id=? AND workspace_id=?',input.agentId,channel.workspace_id):null;if(input.agentId&&!agent)throw failure(400,'Unknown agent');
       const source=input.sourceMessageId?get('SELECT * FROM messages WHERE id=? AND workspace_id=? AND target_type=? AND target_id=?',cut(input.sourceMessageId,100),channel.workspace_id,'channel',channel.id):null;
       if(input.sourceMessageId&&(!source||source.author_type==='system'))throw failure(400,'Choose a message from this channel');
@@ -289,7 +295,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     }
     const threadRoute=pathname.match(/^\/api\/threads\/([^/]+)$/);
     if(threadRoute&&['PATCH','DELETE'].includes(req.method)){
-      const t=get('SELECT * FROM threads WHERE id=?',threadRoute[1]);if(!t)throw failure(404,'Thread not found');requireWorkspace(user.id,t.workspace_id);const m=membership(user.id,t.workspace_id);if(!isAdmin(m)&&t.author_id!==user.id)throw failure(403,'Only the thread creator or an admin can edit this thread');
+      const t=get('SELECT * FROM threads WHERE id=?',threadRoute[1]);if(!t)throw failure(404,'Thread not found');targetWorkspace(user.id,'thread',t.id);const m=membership(user.id,t.workspace_id);if(!isAdmin(m)&&t.author_id!==user.id)throw failure(403,'Only the thread creator or an admin can edit this thread');
       if(req.method==='DELETE'){purgeConversation('thread',t.id);run('DELETE FROM threads WHERE id=?',t.id);audit(user.id,t.workspace_id,'thread.delete','thread',t.id);broadcast(t.workspace_id);return asJSON(res,200,{ok:true})}
       const input=await bodyJSON(req);if(input.agentId && !get('SELECT id FROM agents WHERE id=? AND workspace_id=?',input.agentId,t.workspace_id))throw failure(400,'Agent not found');
       const name=cut(input.name??t.name,120);if(!name)throw failure(400,'Thread name is required');
