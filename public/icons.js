@@ -1,4 +1,7 @@
 const paths={
+  'refresh-cw':'<path d="M20 11a8 8 0 0 0-14.9-3.5L3 10m0-6v6h6M4 13a8 8 0 0 0 14.9 3.5L21 14m0 6v-6h-6"/>',
+  pause:'<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+  play:'<path d="M7 4l13 8-13 8V4z"/>',
   hash:'<path d="M4 9h16M3 15h16M11 3 7 21M17 3l-4 18"/>',
   threads:'<path d="m4 4 16 16M7 2l15 15M2 7l15 15M2 2l20 20"/>',
   'message-square':'<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8A8.5 8.5 0 0 1 12.5 3h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
