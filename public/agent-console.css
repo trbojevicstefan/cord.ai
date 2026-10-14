@@ -1,0 +1,118 @@
+/* Cord x OPAYA control plane. Scoped to avoid changing channel/thread layouts. */
+.opaya-console-backdrop{position:fixed;inset:0;z-index:2600;background:rgba(4,5,9,.84);backdrop-filter:blur(8px);display:grid;place-items:center;padding:25px;color:#f4f5f8}
+.opaya-console{display:flex;flex-direction:column;width:min(1190px,100%);height:min(804px,100%);min-height:370px;background:#191b22;border:1px solid #454857;border-radius:16px;box-shadow:0 32px 140px #000b;overflow:hidden;text-align:left}
+.opaya-console button{font:inherit;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}
+.opaya-console button:focus-visible,.opaya-console input:focus-visible{outline:2px solid #9ca7ff;outline-offset:2px}
+.opaya-console-head{display:flex;align-items:center;gap:17px;min-height:102px;flex:none;padding:20px 26px;border-bottom:1px solid #343640;background:#1d1f27}
+.opaya-console-head-icon{width:53px;height:53px;flex:none;display:grid;place-items:center;border-radius:15px;color:#bdc5ff;background:#343959;border:1px solid #59629c}
+.opaya-console-head h1{margin:2px 0 4px;font-size:23px;letter-spacing:-.6px;font-weight:750;line-height:1.25}
+.opaya-console-head p{font-size:12px;color:#a5a9b6;margin:0;line-height:1.45}
+.opaya-console-head small{font-size:10px;letter-spacing:1.2px;font-weight:800;color:#9299bb}
+.opaya-console-head-actions{margin-left:auto;display:flex;gap:10px;align-items:center;white-space:nowrap}
+.opaya-console-live{display:inline-flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid #35544a;background:#20352e;color:#a1eccb;border-radius:7px;font-size:11px;font-weight:650}
+.opaya-console-live i,.opaya-console-badge i,.opaya-console-status-dot{width:7px;height:7px;background:#4fc990;border-radius:100%;display:inline-block;flex:none}
+.opaya-console-close{height:35px;width:35px;display:grid;place-items:center;border-radius:7px;color:#b3b6c3;background:#2b2d36;border:1px solid #41434d}
+.opaya-console-close:hover{background:#444650;color:#fff}
+.opaya-console-action{border-radius:7px;background:#30333f;border:1px solid #484c5d;color:#e5e7ef;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:9px 11px;font-size:12px;font-weight:650;white-space:nowrap}
+.opaya-console-action:hover{background:#43475a;border-color:#7b82b5}
+.opaya-console-action:disabled{opacity:.48;cursor:wait}
+.opaya-console-workspace{display:grid;grid-template-columns:252px minmax(0,1fr);flex:1;min-height:0}
+.opaya-console-nav{display:flex;flex-direction:column;background:#15171d;border-right:1px solid #30333d;min-height:0;padding:18px 12px 12px}
+.opaya-console-nav-head{display:flex;align-items:center;justify-content:space-between;padding:2px 11px 14px;gap:8px}
+.opaya-console-nav-head strong{font-size:10px;letter-spacing:1px;color:#9b9fad}
+.opaya-console-nav-head span{font-size:10px;color:#818797}
+.opaya-console-all,.opaya-console-agent{width:100%;display:flex;align-items:center;gap:10px;text-align:left;min-height:44px;border-radius:8px;color:#b7bac6;padding:8px 10px}
+.opaya-console-all:hover,.opaya-console-agent:hover{background:#272b35}
+.opaya-console-all.active,.opaya-console-agent.active{background:#343955;color:#e7eaff}
+.opaya-console-all>span{margin-left:auto;background:#45495c;border-radius:5px;font-size:11px;min-width:21px;text-align:center;padding:3px 4px}
+.opaya-console-agent-list{overflow:auto;flex:1;margin-top:8px;padding-right:2px}
+.opaya-console-agent{min-height:59px}
+.opaya-console-agent-avatar{display:grid;place-items:center;width:35px;height:35px;border-radius:11px;background:#343d54;color:#c7d6ff;font-size:11px;font-weight:850;flex:none}
+.opaya-console-agent-label{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.opaya-console-agent-label b{font-size:12px;font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.opaya-console-agent-label small{font-size:10px;color:#8d94a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.opaya-console-status-dot{margin-left:auto;background:#778296}
+.opaya-console-status-dot.online,.opaya-console-status-dot.running{background:#47c88d;box-shadow:0 0 0 3px #45c88d22}
+.opaya-console-status-dot.paused,.opaya-console-status-dot.pairing,.opaya-console-status-dot.queued{background:#e2b66e}
+.opaya-console-status-dot.failed,.opaya-console-status-dot.disconnected{background:#ea7180}
+.opaya-console-status-dot.demo{background:#868ba6}
+.opaya-console-nav-bottom{margin-top:auto;border-top:1px solid #31333c;padding:14px 5px 2px;display:flex;flex-direction:column;gap:10px}
+.opaya-console-nav-bottom .opaya-console-action{width:100%;background:#5865db;color:white;border-color:#6672e1}
+.opaya-console-nav-bottom small{text-align:center;color:#797e8f;font-size:10px}
+.opaya-console-sidebar-empty{font-size:12px;color:#888e9e;padding:15px 12px}
+.opaya-console-center{overflow:auto;min-width:0;padding:24px 26px 35px;background:#1a1c24}
+.opaya-console-tabs{display:flex;align-items:center;gap:9px;border-bottom:1px solid #373946;margin-bottom:24px}
+.opaya-console-tabs button{padding:10px 15px 14px;border-bottom:2px solid transparent;margin-bottom:-1px;font-size:12px;color:#9499a9;font-weight:700}
+.opaya-console-tabs button:hover{color:#e4e7f1}
+.opaya-console-tabs button.active{border-color:#8d9aff;color:#e2e6ff}
+.opaya-console-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:11px;margin-bottom:25px}
+.opaya-console-metric{display:flex;flex-direction:column;gap:6px;padding:16px 13px;min-height:111px;border-radius:10px;background:#242733;border:1px solid #3c4051}
+.opaya-console-metric span{font-size:11px;font-weight:650;color:#a7adbe}
+.opaya-console-metric strong{font-size:29px;letter-spacing:-1px;color:#f5f6fb;line-height:1.15}
+.opaya-console-metric small{font-size:10px;color:#9399ab;line-height:1.3}
+.opaya-console-metric.live strong{color:#88dab2}
+.opaya-console-metric.danger strong{color:#ffa5ad}
+.opaya-console-section-header{display:flex;align-items:center;gap:14px;justify-content:space-between;margin:19px 0 13px}
+.opaya-console-section-header h3{font-size:15px;font-weight:760;color:#e6e9f5;margin:0}
+.opaya-console-section-header>div>h3{font-size:19px}
+.opaya-console-section-header span{color:#9aa0b1;font-size:12px}
+.opaya-console-link{display:inline-flex;align-items:center;gap:7px;color:#a8b8ff;font-size:12px;font-weight:700}
+.opaya-console-link:hover{color:#d8dfff}
+.opaya-console-agent-details{background:#222530;border:1px solid #3c4150;border-radius:11px;padding:18px 20px;margin-bottom:23px}
+.opaya-console-agent-details .opaya-console-section-header{margin:0 0 14px}
+.opaya-console-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}
+.opaya-console-detail-grid>div{display:flex;flex-direction:column;gap:6px;min-width:0}
+.opaya-console-detail-grid small{color:#9198aa;font-size:10px;letter-spacing:.3px}
+.opaya-console-detail-grid b{font-size:12px;color:#dce0ed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.opaya-console-note{display:flex;gap:8px;align-items:flex-start;padding:12px 14px;background:#263148;border:1px solid #3e4d6f;border-radius:7px;font-size:11px;color:#b9c9f2;line-height:1.5;margin:12px 0}
+.opaya-console-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.opaya-console-caveat{font-size:11px;line-height:1.5;color:#8f95a6;margin:14px 0 0}
+.opaya-console-badge{display:inline-flex;align-items:center;gap:7px;font-size:10px;font-weight:700;text-transform:capitalize;border-radius:18px;background:#323640;color:#c4c9d5;border:1px solid #454958;padding:5px 9px;white-space:nowrap}
+.opaya-console-badge i{width:6px;height:6px;background:#8390a3}
+.opaya-console-badge.online,.opaya-console-badge.completed{background:#1d3730;border-color:#3b6451;color:#93dcb8}
+.opaya-console-badge.online i,.opaya-console-badge.completed i{background:#64d9a2}
+.opaya-console-badge.running{background:#293851;border-color:#475f87;color:#b1ccff}
+.opaya-console-badge.running i{background:#88aefa}
+.opaya-console-badge.failed,.opaya-console-badge.disconnected{color:#ffabb3;background:#45282f;border-color:#80525b}
+.opaya-console-badge.failed i,.opaya-console-badge.disconnected i{background:#ff8c9e}
+.opaya-console-badge.paused,.opaya-console-badge.queued,.opaya-console-badge.pairing{color:#e9d096;background:#4a3d2b;border-color:#725e3b}
+.opaya-console-badge.paused i,.opaya-console-badge.queued i,.opaya-console-badge.pairing i{background:#edc680}
+.opaya-console-run-list{display:flex;flex-direction:column;gap:4px}
+.opaya-console-run{display:flex;align-items:center;gap:11px;border:1px solid transparent;border-radius:9px;width:100%;min-height:62px;text-align:left;padding:10px 11px}
+.opaya-console-run:hover{background:#272b36;border-color:#394052}
+.opaya-console-run-status{width:32px;height:32px;border-radius:8px;background:#3b4254;color:#a9c0f1;display:grid;place-items:center;flex:none}
+.opaya-console-run-status.completed{background:#254737;color:#9be7be}
+.opaya-console-run-status.failed{background:#56333c;color:#ffb0ba}
+.opaya-console-run-main{display:flex;min-width:0;flex:1;flex-direction:column;gap:5px}
+.opaya-console-run-main b{font-size:12px;color:#e7e9f2}
+.opaya-console-run-main small{font-size:11px;color:#9198aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.opaya-console-run time{font-size:10px;color:#8b92a4;min-width:60px;text-align:right}
+.opaya-console-toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap}
+.opaya-console-search{background:#252934;border:1px solid #404653;border-radius:8px;display:flex;gap:8px;align-items:center;padding:8px 11px;min-width:190px;flex:1;color:#9da6b9}
+.opaya-console-search input{min-width:0;width:100%;background:transparent;border:0;outline:0;font-size:12px;color:#edf0f8}
+.opaya-console-search input::placeholder{color:#828b9c}
+.opaya-console-filter{display:flex;gap:4px;background:#242630;padding:4px;border:1px solid #363a47;border-radius:9px;flex-wrap:wrap}
+.opaya-console-filter button{font-size:10px;font-weight:700;color:#aab0bd;padding:7px 9px;border-radius:6px}
+.opaya-console-filter button.active{background:#42485c;color:#f1f2f8}
+.opaya-console-filter button:hover{background:#3b3f50;color:#f1f2f8}
+.opaya-console-approval{border:1px solid #77643e;border-radius:11px;background:#302a24;margin:13px 0;padding:16px 18px}
+.opaya-console-approval-head{display:flex;gap:11px;align-items:center;color:#f0d8a0}
+.opaya-console-approval-head>span{display:flex;flex-direction:column;gap:5px}
+.opaya-console-approval-head b{font-size:12px}
+.opaya-console-approval-head small{font-size:11px;color:#ac9978}
+.opaya-console-approval p{font-size:12px;color:#efdfbf;margin:15px 0 8px}
+.opaya-console-approval pre,.opaya-console-log pre{white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;padding:12px;background:#202127;border-radius:7px;font-size:11px;line-height:1.6;color:#bac1d5;border:1px solid #454754}
+.opaya-console-approval-history{border-top:1px solid #383b4b;padding:12px 0;font-size:12px}
+.opaya-console-approval-history .opaya-console-badge{margin-left:10px}
+.opaya-console-approval-history p{color:#aeb2c4}
+.opaya-console-detail-screen h2{font-size:20px;margin:12px 0 25px}
+.opaya-console-log h3{font-size:13px;color:#d0d4df;margin:22px 0 10px}
+.opaya-console-log.error pre{border-color:#7a4854;color:#ffb8c0;background:#39232a}
+.opaya-console-empty{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;min-height:205px;text-align:center;color:#9aa4bb;padding:20px}
+.opaya-console-empty strong{font-size:15px;color:#dce2ed}
+.opaya-console-empty p{font-size:12px;max-width:320px;line-height:1.6;margin:0}
+.opaya-console-loading{padding:90px 30px;color:#adb8d6;text-align:center;font-size:13px}
+.opaya-console-foot{min-height:37px;flex:none;border-top:1px solid #353844;background:#181a21;display:flex;align-items:center;gap:9px;padding:8px 18px;color:#8991a3;font-size:10px}
+@media(max-width:900px){.opaya-console-backdrop{padding:9px}.opaya-console-workspace{grid-template-columns:210px minmax(0,1fr)}.opaya-console-head{padding:14px 17px;min-height:91px}.opaya-console-head h1{font-size:18px}.opaya-console-head p,.opaya-console-live{display:none}.opaya-console-center{padding:17px}.opaya-console-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.opaya-console-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.opaya-console-backdrop{padding:0}.opaya-console{border-radius:0;height:100%;width:100%}.opaya-console-head{min-height:76px}.opaya-console-head-icon{height:42px;width:42px}.opaya-console-head-actions>.opaya-console-action{display:none}.opaya-console-workspace{grid-template-columns:100px minmax(0,1fr)}.opaya-console-nav{padding:11px 5px}.opaya-console-nav-head{display:none}.opaya-console-all{font-size:10px;gap:5px;min-height:35px;padding:5px}.opaya-console-all svg{display:none}.opaya-console-agent{padding:6px;min-height:50px}.opaya-console-agent-avatar{width:29px;height:29px;font-size:9px}.opaya-console-agent-label small{display:none}.opaya-console-agent-label b{font-size:10px;max-width:60px}.opaya-console-status-dot{display:none}.opaya-console-nav-bottom .opaya-console-action{font-size:0;padding:10px}.opaya-console-nav-bottom .opaya-console-action svg{width:17px}.opaya-console-center{padding:12px}.opaya-console-tabs{gap:0}.opaya-console-tabs button{padding:10px 7px;font-size:10px}.opaya-console-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.opaya-console-metric{padding:10px;min-height:85px}.opaya-console-metric strong{font-size:23px}.opaya-console-run{gap:6px;padding:9px 5px}.opaya-console-run .opaya-console-badge,.opaya-console-run time{display:none}.opaya-console-foot{font-size:9px}}
+@media(prefers-reduced-motion:reduce){.opaya-console *{transition:none!important}}

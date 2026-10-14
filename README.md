@@ -35,6 +35,8 @@ npm test
 
 Tests cover enrollment, isolation, restarts, queues, duplicate replies, cancellation, leases, approvals, settings and an OPAYA adapter worker against a local gateway. Automated tests make no paid model calls. CI runs on Windows/Linux, Node 22/24.
 
+The **OPAYA Agent Control Center** (sidebar, settings, agent context menu or `Ctrl/Cmd+Shift+A`) shows real device heartbeat, queue sizes, runs, pending approvals and admin controls. It reuses the existing OPAYA bridge; tool inventory and provider token costs are not reported. See [Control Center setup and limits](docs/OPAYA_AGENT_CONTROL_CENTER.md).
+
 See [bridge setup](docs/OPAYA_BRIDGE.md), [architecture](docs/ARCHITECTURE.md), and [remaining scope](docs/MVP_SCOPE.md). Pinned OPAYA source provenance is in `bridge/vendor/opaya/SOURCE.json`.
 
 ## Guided onboarding and Cord Operator

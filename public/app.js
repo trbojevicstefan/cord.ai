@@ -5,6 +5,7 @@ import { createConnectionViews } from './connections.js';
 import { createOperatorPanel } from './operator.js';
 import { createGuidance } from './guidance.js';
 import { createAccessUI } from './access.js';
+import { createAgentConsoleUI } from './agent-console.js';
 
 const app=document.querySelector('#app');
 const state={data:null,selected:{type:'channel',id:'channel-chat'},messages:[],dmView:false,screen:'chat',modal:null,menu:null,profile:null,selectedSettings:'account',searchOpen:false,searchResults:[],searchQuery:'',sidebarOpen:true,memberPanel:true,collapsed:new Set(),hideMuted:false,showArchived:false,threadShow:'all',drafts:{},typing:{},lastSelection:'',toast:null,busy:false,returnScreen:'chat'};
@@ -35,6 +36,7 @@ const discord=createDiscordExperience({api,esc,icon,getState:()=>state,getData:d
 const operator=createOperatorPanel({api,icon,esc,getData:data,isAdmin:admin,onWorkspaceChanged:()=>loadData({keepScroll:true}),onError:handleError});
 const guidance=createGuidance({api,getData:data,isAdmin:admin,onError:handleError,onAction:action=>{if(action==='operator'){void operator.open();return}const map={channel:'create-channel',thread:'create-thread',agent:'connect-agent',dm:'goto-dm',runs:'open-run-log',invite:'show-invite',settings:'open-settings'};if(map[action])void doAction({dataset:{action:map[action]}},{})}});
 const access=createAccessUI({api,esc,icon,getData:data,isAdmin:admin,toast,render:()=>render(),renderOverlays:()=>renderOverlays()});
+const agentConsole=createAgentConsoleUI({api,esc,icon,getData:data,isAdmin:admin,renderOverlays,toast,selectTarget,openModal,loadData,onError:handleError});
 const avatar=(item,size=32,kind='human')=>`<span class="avatar ${kind==='agent'?'avatar-agent':''}" style="--avatar-color:${esc(item?.color||'#5865f2')};width:${size}px;height:${size}px;min-width:${size}px;font-size:${Math.round(size*.34)}px" title="${esc(item?.display_name||item?.name||'User')}">${esc(item?.avatar||item?.display_name?.split(' ').map(s=>s[0]).join('').slice(0,2)||item?.name?.slice(0,2)||'?')}<i class="presence ${esc(item?.status||'online')}"></i></span>`;
 const userName=(type,id)=>type==='agent'?agent(id)?.name:type==='system'?'Cord AI':member(id)?.display_name||'Unknown';
 const getAuthor=(type,id)=>type==='agent'?agent(id):type==='system'?{avatar:'C',color:'#5865f2',name:'Cord AI',status:'online'}:member(id);
@@ -73,11 +75,11 @@ function selectTarget(type,id){
 async function markRead(type,id){try{await api('/read',{method:'POST',body:{targetType:type,targetId:id}});const unread=data().unreads?.[type+':'+id];if(unread){unread.total=0;unread.mentions=0;}const row=document.querySelector('[data-context="'+type+'"][data-id="'+CSS.escape(id)+'"]');row?.querySelectorAll('.discord-unread-dot,.discord-unread-mentions').forEach(el=>el.remove())}catch{}}
 function initEvents(){
   let stream;const connect=()=>{if(!state.data?.workspace)return;stream?.close();stream=new EventSource('/api/events?workspaceId='+encodeURIComponent(state.data.workspace.id));
-    let timer; stream.addEventListener('change',()=>{clearTimeout(timer);timer=setTimeout(()=>loadData({keepScroll:true}).catch(handleError),150)});
-    stream.addEventListener('agent',ev=>{try{const a=JSON.parse(ev.data),k=a.targetType+':'+a.targetId;state.typing[k]=['queued','running'].includes(a.status)?a.agentId:null;if(a.status==='failed')toast(`Agent run failed: ${a.error||'Unknown error'}`,'error');renderMessagesOnly()}catch{}});
+    let timer; stream.addEventListener('change',()=>{agentConsole.event();clearTimeout(timer);timer=setTimeout(()=>loadData({keepScroll:true}).catch(handleError),150)});
+    stream.addEventListener('agent',ev=>{agentConsole.event();try{const a=JSON.parse(ev.data),k=a.targetType+':'+a.targetId;state.typing[k]=['queued','running'].includes(a.status)?a.agentId:null;if(a.status==='failed')toast(`Agent run failed: ${a.error||'Unknown error'}`,'error');renderMessagesOnly()}catch{}});
     stream.addEventListener('notification',ev=>{try{notificationCenter.onEvent(JSON.parse(ev.data))}catch{}});
     stream.addEventListener('typing',ev=>{try{discord.receiveTyping(JSON.parse(ev.data))}catch{}});
-     stream.addEventListener('progress',ev=>{try{const p=JSON.parse(ev.data),r=data().runs?.find(r=>r.id===p.runId);if(r)r.progress=p.progress;if(state.modal?.kind==='runs')renderOverlays();else if(state.screen==='settings'&&state.selectedSettings==='runs')render();}catch{}});
+     stream.addEventListener('progress',ev=>{agentConsole.event();try{const p=JSON.parse(ev.data),r=data().runs?.find(r=>r.id===p.runId);if(r)r.progress=p.progress;if(state.modal?.kind==='runs')renderOverlays();else if(state.screen==='settings'&&state.selectedSettings==='runs')render();}catch{}});
     stream.onerror=()=>{};
   };connect();return connect;
 }
@@ -105,7 +107,7 @@ function selectedHeader(){
   const actions=type==='thread'?`${iconButton('bell-off','toggle-mute','Mute thread')} ${iconButton('pin','favorite','Add to Favorites')} ${iconButton('users','toggle-members','Show members')}`:
     type==='channel'?`${iconButton('threads','browse-threads','Browse threads')} ${iconButton('bell','toggle-mute','Mute channel')} ${iconButton('users','toggle-members','Show members')}`:
     `${iconButton('pin','favorite','Pin conversation')} ${iconButton('users','toggle-members','Show profile')}`;
-  return `<header class="room-header"><button class="mobile-menu icon-btn" data-action="mobile-menu" aria-label="Show channels">${icon('menu',20)}</button><div class="room-crumb">${head}</div><div class="room-tools">${actions}${discord.pinnedButton()}${notificationCenter.button()}<button class="icon-btn header-more" data-action="open-room-menu" title="More options">${icon('more',21)}</button><button class="search-top" data-action="search"><span>Search ${esc(data().workspace?.name||'Cord AI')}</span>${icon('search',17)}</button></div></header>`;
+  return `<header class="room-header"><button class="mobile-menu icon-btn" data-action="mobile-menu" aria-label="Show channels">${icon('menu',20)}</button><div class="room-crumb">${head}</div><div class="room-tools">${actions}${discord.pinnedButton()}${admin()?iconButton('bot','opaya-console-open','Agent Control Center'):''}${notificationCenter.button()}<button class="icon-btn header-more" data-action="open-room-menu" title="More options">${icon('more',21)}</button><button class="search-top" data-action="search"><span>Search ${esc(data().workspace?.name||'Cord AI')}</span>${icon('search',17)}</button></div></header>`;
 }
 function serverRail(){
   return `<aside class="server-rail"><div class="rail-stack">
@@ -149,7 +151,7 @@ function sidebar(){
   return `<aside class="channel-panel ${state.sidebarOpen?'':'mobile-hidden'}">
     <div class="workspace-top"><button class="workspace-switcher" data-action="workspace-menu">${esc(data().workspace?.name||'Cord AI Team')} ${icon('down',14)}</button><button class="invite-people" data-action="show-invite" title="Invite people">${icon('friends',19)}</button></div>
     <div class="sidebar-scroll" data-context="sidebar">
-      <div class="quick-links"><button data-action="open-agent-directory">${icon('bot',19)}<span>AI Agent Directory</span><small>${A().length}</small></button>${admin()?`<button data-action="open-operator">${icon('sparkles',18)}<span>Cord Operator</span><small>LLM</small></button>`:''}<button data-action="open-run-log">${icon('terminal',18)}<span>Agent Runs</span></button></div>
+      <div class="quick-links"><button data-action="open-agent-directory">${icon('bot',19)}<span>AI Agent Directory</span><small>${A().length}</small></button>${admin()?`<button data-action="open-operator">${icon('sparkles',18)}<span>Cord Operator</span><small>LLM</small></button>`:''}${admin()?`<button data-action="opaya-console-open" title="OPAYA Agent Control Center">${icon('bot',18)}<span>Agent Control Center</span><small>LIVE</small></button>`:''}<button data-action="open-run-log">${icon('terminal',18)}<span>Agent Runs</span></button></div>
       <div class="sidebar-divider"></div>
       ${K().map(cat=>`${catLabel(cat)}${state.collapsed.has(cat.id)?'':`<div class="cat-channels">${C().filter(c=>c.category_id===cat.id).map(channelRow).join('')}</div>`}`).join('')}
       ${C().filter(c=>!c.category_id).map(channelRow).join('')}
@@ -166,7 +168,7 @@ function rightPanel(){
   }
   return `<aside class="right-panel members-panel"><div class="panel-group"><div class="panel-heading">TEAM — ${U().length}</div>${U().map(u=>memberRow(u,'user')).join('')}</div><div class="panel-group"><div class="panel-heading">AI AGENTS — ${A().length}</div>${A().map(a=>memberRow(a,'agent')).join('')}</div><div class="panel-small-callout"><span class="mini-symbol">✦</span><div><strong>Agents work with your team</strong><small>Invite any agent into a thread.</small></div></div></aside>`;
 }
-function memberRow(item,kind){return `<button class="member-row" data-action="open-profile" data-kind="${kind}" data-id="${item.id}">${avatar(item,32,kind)}<span class="member-row-name">${esc(item.display_name||item.name)}</span>${kind==='agent'?'<span class="badge-app">APP</span>':(item.role==='owner'?'<span class="crown">♛</span>':'')}</button>`}
+function memberRow(item,kind){return `<button class="member-row" ${kind==='agent'?'data-context="agent"':''} data-action="open-profile" data-kind="${kind}" data-id="${item.id}">${avatar(item,32,kind)}<span class="member-row-name">${esc(item.display_name||item.name)}</span>${kind==='agent'?'<span class="badge-app">APP</span>':(item.role==='owner'?'<span class="crown">♛</span>':'')}</button>`}
 function messageBubble(m,i){
   const item=getAuthor(m.author_type,m.author_id),name=userName(m.author_type,m.author_id),time=dateTime(m.created_at);
   const before=state.messages[i-1];const grouped=before&&before.author_id===m.author_id&&before.author_type===m.author_type&&Date.parse(m.created_at)-Date.parse(before.created_at)<5*60*1000&& !m.metadata?.includes('thread_ref');
@@ -235,7 +237,7 @@ function threadEditor(){
 const settingSections=[
   {title:'USER SETTINGS',items:[['account','Account','user'],['privacy','Data & Privacy','shield'],['notifications','Notifications','bell']]},
   {title:'EXPERIENCE',items:[['appearance','Appearance','eye'],['messaging','Messaging','message-circle'],['shortcuts','Keyboard Shortcuts','terminal']]},
-  {title:'TEAM & AI',items:[['agents','Connected Agents','bot'],['operator','Cord Operator','sparkles'],['runs','Agent Runs','terminal'],['security','Security & Access','shield-check']]},
+  {title:'TEAM & AI',items:[['agents','Connected Agents','bot'],['agent-control','Agent Control Center','bot'],['operator','Cord Operator','sparkles'],['runs','Agent Runs','terminal'],['security','Security & Access','shield-check']]},
   {title:'WORKSPACE',items:[['roles','Roles & Permissions','shield']]}
 ];
 function settingsView(){
@@ -261,6 +263,7 @@ function securitySettings(){return `<div class="settings-page-title">Security & 
 function settingsContent(){const page=preferenceSettings(state.selectedSettings);if(page)return page;switch(state.selectedSettings){
   case 'roles':return access.page();
   case 'operator':return `<div class="settings-page-title">Cord Operator</div><div class="settings-section"><h2>Bring your own LLM</h2><p class="muted-paragraph">Connect OpenAI, Claude, OpenRouter, Groq, Gemini or an OpenAI-compatible model. The Operator can read public team context and propose workspace changes, but every mutation needs your approval.</p><button class="button-primary" data-action="open-operator">Open Cord Operator</button></div>`;
+  case 'agent-control':return agentConsole.settingsCard();
   case 'agents':return `<div class="settings-page-title">Connected Agents</div><div class="settings-section"><p class="muted-paragraph">Your local agents, connected to the team with one prompt.</p>${connections.cards()}${admin()?'<button class="button-primary" data-action="connect-agent">Connect Agent</button>':''}</div>`;
  case 'runs':return `<div class="settings-page-title">Agent Runs & Approvals</div>${connections.approvals(data().approvals||[])}${connections.runs(data().runs||[])}`;
  case 'security':return securitySettings();
@@ -310,6 +313,10 @@ function contextBody(){const menu=state.menu;if(!menu)return '';const {kind,id}=
     let meta;try{meta=JSON.parse(m.metadata||'{}')}catch{meta={}}
     return (state.selected.type==='channel'?menuItem(thread(meta.thread_ref)?'Open Thread':'Create Thread','thread-message',{ico:'threads',id})+menuDivider():'')+discord.contextMenu(m,menuItem,menuDivider)+(m.author_type==='user'&&m.author_id===me().id?menuDivider()+menuItem('Delete Message','delete-message',{ico:'trash',id,danger:true}):'');
   }
+  if(kind==='agent'){
+    const a=agent(id);if(!a)return '';
+    return `${menuItem('Open Agent Control Center','opaya-console-open',{ico:'bot',id,disabled:!admin()})}${menuItem('Send a Message','dm-agent',{ico:'message-square',id})}${menuDivider()}${admin()?menuItem('Configure Agent','edit-agent',{ico:'settings',id}):''}${admin()&&a.type==='bridge'?menuItem(a.paused?'Resume Agent':'Pause Agent','pause-agent',{ico:a.paused?'play':'pause',id}):''}${menuDivider()}${menuItem('Copy Agent ID','copy-id',{ico:'copy',id})}`;
+  }
   if(kind==='thread'){
     const t=thread(id);if(!t)return '';
     const isOwner=admin()||t.author_id===me().id;
@@ -352,7 +359,7 @@ function searchView(){if(!state.searchOpen)return '';
 function captureModalForm(){const form=document.querySelector('#overlays form[data-form]');if(!form||state.busy)return null;return {kind:form.dataset.form,fields:[...form.elements].filter(el=>el.name).map(el=>({name:el.name,type:el.type,value:el.value,checked:el.checked})),focus:document.activeElement?.name,start:document.activeElement?.selectionStart,end:document.activeElement?.selectionEnd};}
 function renderOverlays(saved=captureModalForm()){const host=document.getElementById('overlays');if(!host)return;
  host.innerHTML=`${state.menu?`<div class="context-shade" data-action="close-menu"></div><div class="context-menu" style="left:${Math.max(4,Math.min(window.innerWidth-240,state.menu.x))}px;top:${Math.max(4,Math.min(window.innerHeight-490,state.menu.y))}px">${contextBody()}</div>`:''}
- ${notificationCenter.panel()}${access.overlay()}${state.profile?profileBody():''}${state.modal?modalBody():''}${searchView()}${data().approvals?.length&&!state.modal?`<button class="approval-inbox" data-action="open-run-log">${icon('shield-check',18)} ${data().approvals.length} agent approval${data().approvals.length>1?'s':''} pending</button>`:''}${state.toast?`<div class="toast ${state.toast.kind}">${icon(state.toast.kind==='error'?'info':'check',17)}<span>${esc(state.toast.message)}</span><button data-action="dismiss-toast" title="Dismiss">${icon('close',16)}</button></div>`:''}`;
+ ${notificationCenter.panel()}${access.overlay()}${agentConsole.overlay()}${state.profile?profileBody():''}${state.modal?modalBody():''}${searchView()}${data().approvals?.length&&!state.modal?`<button class="approval-inbox" data-action="open-run-log">${icon('shield-check',18)} ${data().approvals.length} agent approval${data().approvals.length>1?'s':''} pending</button>`:''}${state.toast?`<div class="toast ${state.toast.kind}">${icon(state.toast.kind==='error'?'info':'check',17)}<span>${esc(state.toast.message)}</span><button data-action="dismiss-toast" title="Dismiss">${icon('close',16)}</button></div>`:''}`;
  const form=host.querySelector('form[data-form]');if(saved&&form?.dataset.form===saved.kind){for(const value of saved.fields){for(const el of form.elements){if(el.name!==value.name)continue;if(el.type==='radio'){if(el.value===value.value)el.checked=value.checked;}else if(el.type==='checkbox')el.checked=value.checked;else el.value=value.value;}}const focus=[...form.elements].find(el=>el.name===saved.focus);focus?.focus();if(saved.start!=null&&['text','password','textarea'].includes(focus?.type))focus.setSelectionRange(saved.start,saved.end);}
 }
 function render({keepScroll=false}={}){
@@ -384,7 +391,9 @@ async function doAction(button,event){const action=button.dataset.action,id=butt
     const handledNotification=await notificationCenter.handleAction(action,button,event);
     if(handledNotification==='settings'){openSettings('notifications');return}
     if(handledNotification)return;
-    if(action==='access-open')state.menu=null;
+     if(action==='opaya-console-open'){state.menu=null;state.profile=null;}
+     if(await agentConsole.handleAction(action,button,event))return;
+     if(action==='access-open')state.menu=null;
     if(await access.handle(action,button))return;
     if(await discord.handleAction(action,button,event))return;
     switch(action){
@@ -569,11 +578,13 @@ document.addEventListener('click',event=>{
  const target=event.target.closest('[data-action]');if(!target){if(state.menu||state.profile){state.menu=null;state.profile=null;renderOverlays()}return}
  if(target.dataset.action==='dismiss-modal'&&event.target.closest('[data-stop-click]')&&target===event.target.closest('.modal-scrim'))return;
  if(target.dataset.action==='access-close'&&event.target.closest('.access-dialog')&&target===event.target.closest('.access-backdrop'))return;
+  if(target.dataset.action==='opaya-console-close'&&event.target.closest('.opaya-console')&&target===event.target.closest('.opaya-console-backdrop'))return;
  event.preventDefault();void doAction(target,event);
 });
 document.addEventListener('submit',event=>{const form=event.target.closest('[data-form]');if(form)void submitForm(form,event)});
 document.addEventListener('input',event=>{
- if(event.target.id==='message-input'){const key=state.selected.type+':'+state.selected.id;state.drafts[key]=event.target.value;event.target.style.height='auto';event.target.style.height=Math.min(event.target.scrollHeight,220)+'px'}
+  if(agentConsole.input(event))return;
+  if(event.target.id==='message-input'){const key=state.selected.type+':'+state.selected.id;state.drafts[key]=event.target.value;event.target.style.height='auto';event.target.style.height=Math.min(event.target.scrollHeight,220)+'px'}
  if(event.target.id==='global-search'){
    state.searchQuery=event.target.value;const q=state.searchQuery;
    clearTimeout(window._cordSearchTimer);window._cordSearchTimer=setTimeout(async()=>{if(q.length<2){state.searchResults=[];renderOverlays();return}try{const r=await api('/search?q='+encodeURIComponent(q));if(state.searchQuery!==q)return;state.searchResults=r.messages;const node=document.querySelector('.search-results');if(node){const focused=document.activeElement===document.querySelector('#global-search');const pos=document.querySelector('#global-search')?.selectionStart;renderOverlays();const newInput=document.querySelector('#global-search');if(focused&&newInput){newInput.focus();if(pos!=null)newInput.setSelectionRange(pos,pos)}}}catch(error){handleError(error)}},250);
@@ -582,9 +593,11 @@ document.addEventListener('input',event=>{
 document.addEventListener('keydown',event=>{
  if(event.altKey&&!event.ctrlKey&&!event.metaKey&&event.key.toLowerCase()==='n'){event.preventDefault();void notificationCenter.handleAction('notification-toggle',{dataset:{}});return}
  if(event.key==='F1'){event.preventDefault();guidance.openHelp();return}
+  if((event.ctrlKey||event.metaKey)&&event.shiftKey&&event.key.toLowerCase()==='a'&&admin()){event.preventDefault();void agentConsole.open();return}
  if((event.ctrlKey||event.metaKey)&&event.shiftKey&&event.key.toLowerCase()==='o'){event.preventDefault();void operator.open();return}
  if(event.key==='Escape'){
-   if(notificationCenter.close())return;
+    if(agentConsole.close())return;
+    if(notificationCenter.close())return;
    if(state.searchOpen||state.modal||state.menu||state.profile){closeTransient();return}
    if(state.screen==='edit-thread'){state.screen='chat';render();return}
    if(state.screen==='settings'){exitSettings();return}
@@ -609,5 +622,6 @@ setInterval(()=>{
  if(document.hidden||state.busy||!state.data)return;
  const watching=['agent-directory','connection-settings'].includes(state.modal?.kind)||(state.modal?.kind==='easy-connect'&&state.modal.prompt)||(state.screen==='settings'&&['agents','runs','security'].includes(state.selectedSettings));
  if(watching)loadData({messages:false,keepScroll:true}).catch(handleError);
+  if(agentConsole.isOpen())void agentConsole.refresh({quiet:true});
 },15_000);
 start();

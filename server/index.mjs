@@ -10,6 +10,7 @@ import { createAccess } from './access.mjs';
 import { createNotifications } from './notifications.mjs';
 import { encryptSecret, assertEndpoint, invokeAgent } from './agents.mjs';
 import { createBridge } from './bridge.mjs';
+import { createAgentConsole } from './agent-console.mjs';
 import { createSettings } from './settings.mjs';
 import { createOperator } from './operator.mjs';
 import { bridgeDownload } from './downloads.mjs';
@@ -103,6 +104,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
   function prefs(userId,type,id){return get('SELECT * FROM preferences WHERE user_id=? AND target_type=? AND target_id=?',userId,type,id)||{muted:0,favorite:0,notification_level:'all'}}
   const notifications=createNotifications({store,canReadTarget,requireWorkspace,bodyJSON,asJSON,sendUser});
   const bridge=createBridge({store,broadcast,recordMessage,audit,requireWorkspace,requireAdmin,canReadTarget,bodyJSON,asJSON});
+  const agentConsole=createAgentConsole({store,bridge,requireWorkspace,requireAdmin,canReadTarget,asJSON});
   const settings=createSettings({store,broadcast,audit,requireWorkspace,requireAdmin,canReadTarget,bodyJSON,asJSON,sessionUser,parseCookie,idHash});
   const operator=createOperator({store,broadcast,audit,requireWorkspace,requireAdmin,bodyJSON,asJSON,recordMessage});
   const social=createSocial({store,canReadTarget,targetWorkspace,requireWorkspace,requireAdmin,recordMessage,broadcast,audit,bodyJSON,asJSON,databasePath,notifications});
@@ -187,6 +189,7 @@ export function createApp({ databasePath=process.env.CORD_DB_PATH||join(ROOT,'da
     }
     const user=sessionUser(req);
     if(!user)throw failure(401,'Please sign in');
+    if(await agentConsole.api(req,res,url,user))return;
     if(await access.api(req,res,url,user))return;
     if(await notifications.api(req,res,url,user))return;
     if(await social.api(req,res,url,user))return;
