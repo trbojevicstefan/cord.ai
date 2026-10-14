@@ -1,5 +1,6 @@
 import { icon } from './icons.js';
 import { createDiscordExperience } from './discord-experience.js';
+import { createNotificationsUI } from './notifications.js';
 import { createConnectionViews } from './connections.js';
 import { createOperatorPanel } from './operator.js';
 import { createGuidance } from './guidance.js';
@@ -28,6 +29,7 @@ const category=id=>K().find(x=>x.id===id);
 const dm=id=>D().find(x=>x.id===id);
 const prefs=(type,id)=>data().preferences?.find(x=>x.target_type===type&&x.target_id===id)||{muted:0,favorite:0,notification_level:'all'};
 const admin=()=>['owner','admin'].includes(member(me().id)?.role);
+const notificationCenter=createNotificationsUI({api,icon,esc,getData:data,getSelected:()=>state.selected,selectTarget,jumpToMessage:id=>discord.jumpToMessage(id),renderOverlays,onError:handleError,toast});
 const discord=createDiscordExperience({api,esc,icon,getState:()=>state,getData:data,getMember:id=>member(id),getAgent:id=>agent(id),getChannel:id=>channel(id),isAdmin:admin,toast,loadMessages,renderMessagesOnly,selectTarget,openModal,onHelp:()=>{if(typeof guidance!=='undefined')guidance.openHelp();else openModal('help')}});
 const operator=createOperatorPanel({api,icon,esc,getData:data,isAdmin:admin,onWorkspaceChanged:()=>loadData({keepScroll:true}),onError:handleError});
 const guidance=createGuidance({api,getData:data,isAdmin:admin,onError:handleError,onAction:action=>{if(action==='operator'){void operator.open();return}const map={channel:'create-channel',thread:'create-thread',agent:'connect-agent',dm:'goto-dm',runs:'open-run-log',invite:'show-invite',settings:'open-settings'};if(map[action])void doAction({dataset:{action:map[action]}},{})}});
@@ -49,12 +51,11 @@ async function api(path,opts={}){
 function toast(message,kind='info'){state.toast={message,kind};renderOverlays();clearTimeout(toast._timer);toast._timer=setTimeout(()=>{state.toast=null;renderOverlays()},4200)}
 function handleError(error){console.error(error);toast(error?.message||'Something went wrong','error')}
 async function loadData({messages=true,keepScroll=false}={}){
-  const previousMessages=new Set(state.messages.map(m=>m.id));
-  const result=await api('/bootstrap'+(state.workspaceId?'?workspaceId='+encodeURIComponent(state.workspaceId):''));state.data=result;applySettings();
+  const result=await api('/bootstrap'+(state.workspaceId?'?workspaceId='+encodeURIComponent(state.workspaceId):''));state.data=result;applySettings();notificationCenter.sync(result.notificationSummary);
   if(!current()){
     const fallback=state.dmView?D()[0]:C()[0];state.selected=fallback?{type:state.dmView?'dm':'channel',id:fallback.id}:{type:'channel',id:''};
   }
-  if(messages&&current()){await loadMessages();if(keepScroll&&previousMessages.size&&document.hidden){const incoming=state.messages.filter(m=>!previousMessages.has(m.id)&&m.author_id!==me().id&&m.author_type!=='system');const pref=prefs(state.selected.type,state.selected.id);if(incoming.length&&!pref.muted&&pref.notification_level!=='none'&&(pref.notification_level!=='mentions'||incoming.some(m=>m.content.toLowerCase().includes('@'+me().username.toLowerCase())))){const last=incoming.at(-1);if(result.settings.desktopNotifications&&'Notification' in window&&Notification.permission==='granted')new Notification(userName(last.author_type,last.author_id),{body:last.content.slice(0,160),tag:state.selected.id});if(result.settings.notificationSound){try{const Audio=window.AudioContext||window.webkitAudioContext;const audio=new Audio(),tone=audio.createOscillator(),gain=audio.createGain();tone.connect(gain);gain.connect(audio.destination);gain.gain.value=.035;tone.frequency.value=660;tone.start();tone.stop(audio.currentTime+.12);tone.onended=()=>audio.close();}catch{}}}}}
+  if(messages&&current())await loadMessages();
   render({keepScroll});
   guidance.maybeStart();
 }
@@ -64,7 +65,7 @@ async function loadMessages(){
 }
 function selectTarget(type,id){
   if(type==='dm'){state.dmView=true;put('dmView',true)}else{state.dmView=false;put('dmView',false)}
-  discord.changingTarget();state.selected={type,id};state.screen='chat';state.menu=null;state.profile=null;state.modal=null;state.lastSelection='';put('selected',state.selected);
+  notificationCenter.close();discord.changingTarget();state.selected={type,id};state.screen='chat';state.menu=null;state.profile=null;state.modal=null;state.lastSelection='';put('selected',state.selected);
   loadMessages().then(()=>{render(); markRead(type,id)}).catch(handleError);
 }
 async function markRead(type,id){try{await api('/read',{method:'POST',body:{targetType:type,targetId:id}});const unread=data().unreads?.[type+':'+id];if(unread){unread.total=0;unread.mentions=0;}const row=document.querySelector('[data-context="'+type+'"][data-id="'+CSS.escape(id)+'"]');row?.querySelectorAll('.discord-unread-dot,.discord-unread-mentions').forEach(el=>el.remove())}catch{}}
@@ -72,6 +73,7 @@ function initEvents(){
   let stream;const connect=()=>{if(!state.data?.workspace)return;stream?.close();stream=new EventSource('/api/events?workspaceId='+encodeURIComponent(state.data.workspace.id));
     let timer; stream.addEventListener('change',()=>{clearTimeout(timer);timer=setTimeout(()=>loadData({keepScroll:true}).catch(handleError),150)});
     stream.addEventListener('agent',ev=>{try{const a=JSON.parse(ev.data),k=a.targetType+':'+a.targetId;state.typing[k]=['queued','running'].includes(a.status)?a.agentId:null;if(a.status==='failed')toast(`Agent run failed: ${a.error||'Unknown error'}`,'error');renderMessagesOnly()}catch{}});
+    stream.addEventListener('notification',ev=>{try{notificationCenter.onEvent(JSON.parse(ev.data))}catch{}});
     stream.addEventListener('typing',ev=>{try{discord.receiveTyping(JSON.parse(ev.data))}catch{}});
      stream.addEventListener('progress',ev=>{try{const p=JSON.parse(ev.data),r=data().runs?.find(r=>r.id===p.runId);if(r)r.progress=p.progress;if(state.modal?.kind==='runs')renderOverlays();else if(state.screen==='settings'&&state.selectedSettings==='runs')render();}catch{}});
     stream.onerror=()=>{};
@@ -101,7 +103,7 @@ function selectedHeader(){
   const actions=type==='thread'?`${iconButton('bell-off','toggle-mute','Mute thread')} ${iconButton('pin','favorite','Add to Favorites')} ${iconButton('users','toggle-members','Show members')}`:
     type==='channel'?`${iconButton('threads','browse-threads','Browse threads')} ${iconButton('bell','toggle-mute','Mute channel')} ${iconButton('users','toggle-members','Show members')}`:
     `${iconButton('pin','favorite','Pin conversation')} ${iconButton('users','toggle-members','Show profile')}`;
-  return `<header class="room-header"><button class="mobile-menu icon-btn" data-action="mobile-menu" aria-label="Show channels">${icon('menu',20)}</button><div class="room-crumb">${head}</div><div class="room-tools">${actions}${discord.pinnedButton()}<button class="icon-btn header-more" data-action="open-room-menu" title="More options">${icon('more',21)}</button><button class="search-top" data-action="search"><span>Search ${esc(data().workspace?.name||'Cord AI')}</span>${icon('search',17)}</button></div></header>`;
+  return `<header class="room-header"><button class="mobile-menu icon-btn" data-action="mobile-menu" aria-label="Show channels">${icon('menu',20)}</button><div class="room-crumb">${head}</div><div class="room-tools">${actions}${discord.pinnedButton()}${notificationCenter.button()}<button class="icon-btn header-more" data-action="open-room-menu" title="More options">${icon('more',21)}</button><button class="search-top" data-action="search"><span>Search ${esc(data().workspace?.name||'Cord AI')}</span>${icon('search',17)}</button></div></header>`;
 }
 function serverRail(){
   return `<aside class="server-rail"><div class="rail-stack">
@@ -112,7 +114,7 @@ function serverRail(){
     <button class="rail-item rail-new" data-action="connect-agent" title="Connect agent">${icon('plus',24)}</button>
     <div class="rail-rule"></div>
     <button class="rail-item rail-explore" data-action="show-invite" title="Invite team">${icon('users',22)}</button>
-  </div><div class="rail-bottom">${admin()?`<button class="rail-help" data-action="open-operator" title="Cord Operator · Ctrl/⌘+Shift+O">${icon('sparkles',21)}</button>`:''}<button class="rail-help" data-action="show-help" title="Help">${icon('info',21)}</button></div></aside>`;
+  </div><div class="rail-bottom">${notificationCenter.railButton()}${admin()?`<button class="rail-help" data-action="open-operator" title="Cord Operator · Ctrl/⌘+Shift+O">${icon('sparkles',21)}</button>`:''}<button class="rail-help" data-action="show-help" title="Help">${icon('info',21)}</button></div></aside>`;
 }
 function catLabel(cat){const collapsed=state.collapsed.has(cat.id);return `<div class="category-row" data-context="category" data-id="${cat.id}">
     <button class="category-title" data-action="toggle-category" data-id="${cat.id}">${icon('down',11,collapsed?'rotate-minus':'')}<span>${esc(cat.name)}</span></button>
@@ -244,6 +246,7 @@ function applySettings(){
 }
 function preferenceSettings(section){
  const s=data().settings||{};
+ if(section==='notifications')return notificationCenter.settings();
  const check=(key,label,hint)=>`<div class="settings-info-row"><span><strong>${label}</strong><small class="field-hint">${hint}</small></span>${switcher(key,s[key])}</div>`;
  if(['appearance','messaging','notifications'].includes(section))return `<div class="settings-page-title">${section[0].toUpperCase()+section.slice(1)}</div><form data-form="preferences" class="settings-section"><h2>Display</h2>${field('THEME',select('theme',opts([['dark','Midnight'],['light','Daylight']],s.theme)))}${field('MESSAGE DENSITY',select('density',opts([['comfortable','Comfortable'],['compact','Compact']],s.density)))}${field('MESSAGE FONT SIZE',select('fontSize',opts([12,13,14,16,18].map(n=>[n,n+' px']),s.fontSize)))}<h2>Messaging</h2>${check('enterToSend','Enter to send','When off, use Ctrl/⌘+Enter to send. Shift+Enter always inserts a line break.')}${check('showTyping','Show agent activity','Show when an agent is queued or working in your conversation.')}<h2>Notifications</h2>${check('desktopNotifications','Desktop notifications','Notify about new messages in the open conversation while Cord is in the background.')}${check('notificationSound','Message sound','Play a short sound for background conversation activity.')}<div class="connection-actions"><button type="button" class="button-secondary" data-action="enable-notifications">Allow Desktop Notifications</button><button type="submit" class="button-primary">Save Preferences</button></div><p class="muted-paragraph">Per-channel mute and notification levels are available in each conversation’s right-click menu. Preferences sync with your account.</p></form>`;
  if(section==='account')return `<div class="settings-page-title">Account</div><div class="settings-section"><h2>Your Profile</h2><div class="settings-info-row"><strong>${esc(me().display_name)}</strong><span>@${esc(me().username)}</span><button class="button-secondary" data-action="edit-profile">Edit Profile</button></div><div class="connection-actions"><button class="button-secondary" data-action="change-password">Change Password</button><button class="button-secondary" data-action="show-sessions">Manage Sessions</button></div></div>${admin()?`<form class="settings-section" data-form="workspace"><h2>Workspace</h2>${field('WORKSPACE NAME',input('name',data().workspace.name,'required minlength="2" maxlength="80"'))}${field('ICON',input('icon',data().workspace.icon||'C','maxlength="3"'))}<button class="button-primary" type="submit">Save Workspace</button></form>`:''}`;
@@ -345,7 +348,7 @@ function searchView(){if(!state.searchOpen)return '';
 function captureModalForm(){const form=document.querySelector('#overlays form[data-form]');if(!form||state.busy)return null;return {kind:form.dataset.form,fields:[...form.elements].filter(el=>el.name).map(el=>({name:el.name,type:el.type,value:el.value,checked:el.checked})),focus:document.activeElement?.name,start:document.activeElement?.selectionStart,end:document.activeElement?.selectionEnd};}
 function renderOverlays(saved=captureModalForm()){const host=document.getElementById('overlays');if(!host)return;
  host.innerHTML=`${state.menu?`<div class="context-shade" data-action="close-menu"></div><div class="context-menu" style="left:${Math.max(4,Math.min(window.innerWidth-240,state.menu.x))}px;top:${Math.max(4,Math.min(window.innerHeight-490,state.menu.y))}px">${contextBody()}</div>`:''}
- ${state.profile?profileBody():''}${state.modal?modalBody():''}${searchView()}${data().approvals?.length&&!state.modal?`<button class="approval-inbox" data-action="open-run-log">${icon('shield-check',18)} ${data().approvals.length} agent approval${data().approvals.length>1?'s':''} pending</button>`:''}${state.toast?`<div class="toast ${state.toast.kind}">${icon(state.toast.kind==='error'?'info':'check',17)}<span>${esc(state.toast.message)}</span><button data-action="dismiss-toast" title="Dismiss">${icon('close',16)}</button></div>`:''}`;
+ ${notificationCenter.panel()}${state.profile?profileBody():''}${state.modal?modalBody():''}${searchView()}${data().approvals?.length&&!state.modal?`<button class="approval-inbox" data-action="open-run-log">${icon('shield-check',18)} ${data().approvals.length} agent approval${data().approvals.length>1?'s':''} pending</button>`:''}${state.toast?`<div class="toast ${state.toast.kind}">${icon(state.toast.kind==='error'?'info':'check',17)}<span>${esc(state.toast.message)}</span><button data-action="dismiss-toast" title="Dismiss">${icon('close',16)}</button></div>`:''}`;
  const form=host.querySelector('form[data-form]');if(saved&&form?.dataset.form===saved.kind){for(const value of saved.fields){for(const el of form.elements){if(el.name!==value.name)continue;if(el.type==='radio'){if(el.value===value.value)el.checked=value.checked;}else if(el.type==='checkbox')el.checked=value.checked;else el.value=value.value;}}const focus=[...form.elements].find(el=>el.name===saved.focus);focus?.focus();if(saved.start!=null&&['text','password','textarea'].includes(focus?.type))focus.setSelectionRange(saved.start,saved.end);}
 }
 function render({keepScroll=false}={}){
@@ -373,7 +376,12 @@ function editThread(id){state.selected={type:'thread',id};state.screen='edit-thr
 function openSearch(){state.searchOpen=true;state.menu=null;state.modal=null;state.profile=null;state.searchResults=[];state.searchQuery='';renderOverlays();requestAnimationFrame(()=>document.querySelector('#global-search')?.focus())}
 async function updatePref(type,id,patch){const existing=prefs(type,id);await api('/preferences',{method:'POST',body:{targetType:type,targetId:id,...patch}});state.menu=null;await loadData({keepScroll:true});}
 async function doAction(button,event){const action=button.dataset.action,id=button.dataset.id,type=button.dataset.type;
- try{if(await discord.handleAction(action,button,event))return;switch(action){
+ try{
+    const handledNotification=await notificationCenter.handleAction(action,button,event);
+    if(handledNotification==='settings'){openSettings('notifications');return}
+    if(handledNotification)return;
+    if(await discord.handleAction(action,button,event))return;
+    switch(action){
   case 'close-menu':state.menu=null;renderOverlays();break;
   case 'dismiss-toast':state.toast=null;renderOverlays();break;
   case 'dismiss-modal':state.modal=null;renderOverlays();break;
@@ -501,6 +509,8 @@ async function submitForm(form,event){event.preventDefault();const kind=form.dat
     const r=await api('/agent-connections',{method:'POST',body:{...values,workspaceId:data().workspace.id}});state.modal={kind:'easy-connect',...r};await loadData({keepScroll:true});
   }else if(kind==='connection-settings'){
     await api(`/agent-connections/${form.dataset.id}/settings`,{method:'PATCH',body:{...values,timeoutSeconds:Number(values.timeoutSeconds)}});await loadData({keepScroll:true});toast('Agent settings saved');
+  }else if(kind==='notification-preferences'){
+    await notificationCenter.save(values);await loadData({messages:false,keepScroll:true});toast('Notification preferences saved');
   }else if(kind==='preferences'){
     const patch={...values,fontSize:Number(values.fontSize)};delete patch.workspaceId;await api('/settings',{method:'PATCH',body:patch});await loadData({keepScroll:true});toast('Preferences saved');
   }else if(kind==='workspace'){
@@ -563,9 +573,11 @@ document.addEventListener('input',event=>{
  }
 });
 document.addEventListener('keydown',event=>{
+ if(event.altKey&&!event.ctrlKey&&!event.metaKey&&event.key.toLowerCase()==='n'){event.preventDefault();void notificationCenter.handleAction('notification-toggle',{dataset:{}});return}
  if(event.key==='F1'){event.preventDefault();guidance.openHelp();return}
  if((event.ctrlKey||event.metaKey)&&event.shiftKey&&event.key.toLowerCase()==='o'){event.preventDefault();void operator.open();return}
  if(event.key==='Escape'){
+   if(notificationCenter.close())return;
    if(state.searchOpen||state.modal||state.menu||state.profile){closeTransient();return}
    if(state.screen==='edit-thread'){state.screen='chat';render();return}
    if(state.screen==='settings'){exitSettings();return}

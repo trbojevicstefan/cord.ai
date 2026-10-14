@@ -19,7 +19,7 @@ const mentionsOf=text=>Array.from(String(text).matchAll(/<@([a-zA-Z0-9_-]{1,100}
 const channelsOf=text=>Array.from(String(text).matchAll(/<#([a-zA-Z0-9_-]{1,100})>/g),m=>m[1]);
 const allowedType=type=>['channel','thread','dm'].includes(type);
 
-export function createSocial({store,canReadTarget,targetWorkspace,requireWorkspace,requireAdmin,recordMessage,broadcast,audit,bodyJSON,asJSON,databasePath}) {
+export function createSocial({store,canReadTarget,targetWorkspace,requireWorkspace,requireAdmin,recordMessage,broadcast,audit,bodyJSON,asJSON,databasePath,notifications}) {
   const {db,get,all,run}=store;
   const folder=join(dirname(databasePath),'uploads');
   const lastTyping=new Map();
@@ -205,11 +205,13 @@ export function createSocial({store,canReadTarget,targetWorkspace,requireWorkspa
         const thread=get('SELECT archived,locked FROM threads WHERE id=?',message.target_id);
         if(thread?.archived)throw bad(403,'Thread is closed');
       }
-      // Parse and validate mentions before persisting either edit or notification changes.
+      // Notify only newly mentioned users after an edit; never re-notify existing mentions.
+      const prior=all('SELECT user_id FROM message_mentions WHERE message_id=?',message.id).map(row=>row.user_id);
       const parsed=validateMentions(user.id,message.workspace_id,content);
       run('UPDATE messages SET content=?,edited_at=? WHERE id=?',content,now(),message.id);
       run('DELETE FROM message_mentions WHERE message_id=?',message.id);
       for(const id of parsed.humans)run('INSERT OR IGNORE INTO message_mentions(message_id,user_id) VALUES(?,?)',message.id,id);
+      try{notifications.onEditedMentions({...message,content},prior)}catch(error){console.error('Edited mention notification failed:',error)}
       audit(user.id,message.workspace_id,'message.edit',message.target_type,message.id);broadcastMessage(message);
       asJSON(res,200,{ok:true,messageId:message.id});return true;
     }

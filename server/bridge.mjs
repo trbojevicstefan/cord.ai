@@ -111,7 +111,7 @@ export function createBridge({store,broadcast,recordMessage,audit,requireWorkspa
     }
     if(action==='approval'){
       if(job.status!=='running')throw fail(409,'Run is no longer active');
-      const id=uid();run('INSERT INTO bridge_approvals(id,job_id,title,detail,created_at) VALUES(?,?,?,?,?)',id,job.id,text(input.title,200),text(input.detail,5000),now());emit(d.agent_id);
+      const id=uid();run('INSERT INTO bridge_approvals(id,job_id,title,detail,created_at) VALUES(?,?,?,?,?)',id,job.id,text(input.title,200),text(input.detail,5000),now());broadcast(job.workspace_id,'agent-approval',{approvalId:id,runId:job.id,targetType:job.target_type,targetId:job.target_id},job.target_type==='dm'?job.target_id:null);emit(d.agent_id);
       asJSON(res,201,{ok:true,id});return true;
     }
     if(action==='complete'){
