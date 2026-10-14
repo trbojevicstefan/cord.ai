@@ -4,6 +4,7 @@ import { createNotificationsUI } from './notifications.js';
 import { createConnectionViews } from './connections.js';
 import { createOperatorPanel } from './operator.js';
 import { createGuidance } from './guidance.js';
+import { createAccessUI } from './access.js';
 
 const app=document.querySelector('#app');
 const state={data:null,selected:{type:'channel',id:'channel-chat'},messages:[],dmView:false,screen:'chat',modal:null,menu:null,profile:null,selectedSettings:'account',searchOpen:false,searchResults:[],searchQuery:'',sidebarOpen:true,memberPanel:true,collapsed:new Set(),hideMuted:false,showArchived:false,threadShow:'all',drafts:{},typing:{},lastSelection:'',toast:null,busy:false,returnScreen:'chat'};
@@ -33,6 +34,7 @@ const notificationCenter=createNotificationsUI({api,icon,esc,getData:data,getSel
 const discord=createDiscordExperience({api,esc,icon,getState:()=>state,getData:data,getMember:id=>member(id),getAgent:id=>agent(id),getChannel:id=>channel(id),isAdmin:admin,toast,loadMessages,renderMessagesOnly,selectTarget,openModal,onHelp:()=>{if(typeof guidance!=='undefined')guidance.openHelp();else openModal('help')}});
 const operator=createOperatorPanel({api,icon,esc,getData:data,isAdmin:admin,onWorkspaceChanged:()=>loadData({keepScroll:true}),onError:handleError});
 const guidance=createGuidance({api,getData:data,isAdmin:admin,onError:handleError,onAction:action=>{if(action==='operator'){void operator.open();return}const map={channel:'create-channel',thread:'create-thread',agent:'connect-agent',dm:'goto-dm',runs:'open-run-log',invite:'show-invite',settings:'open-settings'};if(map[action])void doAction({dataset:{action:map[action]}},{})}});
+const access=createAccessUI({api,esc,icon,getData:data,isAdmin:admin,toast,render:()=>render(),renderOverlays:()=>renderOverlays()});
 const avatar=(item,size=32,kind='human')=>`<span class="avatar ${kind==='agent'?'avatar-agent':''}" style="--avatar-color:${esc(item?.color||'#5865f2')};width:${size}px;height:${size}px;min-width:${size}px;font-size:${Math.round(size*.34)}px" title="${esc(item?.display_name||item?.name||'User')}">${esc(item?.avatar||item?.display_name?.split(' ').map(s=>s[0]).join('').slice(0,2)||item?.name?.slice(0,2)||'?')}<i class="presence ${esc(item?.status||'online')}"></i></span>`;
 const userName=(type,id)=>type==='agent'?agent(id)?.name:type==='system'?'Cord AI':member(id)?.display_name||'Unknown';
 const getAuthor=(type,id)=>type==='agent'?agent(id):type==='system'?{avatar:'C',color:'#5865f2',name:'Cord AI',status:'online'}:member(id);
@@ -233,7 +235,8 @@ function threadEditor(){
 const settingSections=[
   {title:'USER SETTINGS',items:[['account','Account','user'],['privacy','Data & Privacy','shield'],['notifications','Notifications','bell']]},
   {title:'EXPERIENCE',items:[['appearance','Appearance','eye'],['messaging','Messaging','message-circle'],['shortcuts','Keyboard Shortcuts','terminal']]},
-  {title:'TEAM & AI',items:[['agents','Connected Agents','bot'],['operator','Cord Operator','sparkles'],['runs','Agent Runs','terminal'],['security','Security & Access','shield-check']]}
+  {title:'TEAM & AI',items:[['agents','Connected Agents','bot'],['operator','Cord Operator','sparkles'],['runs','Agent Runs','terminal'],['security','Security & Access','shield-check']]},
+  {title:'WORKSPACE',items:[['roles','Roles & Permissions','shield']]}
 ];
 function settingsView(){
   return `<div class="settings-layout"><aside class="settings-sidebar"><div class="settings-sidebar-content"><div class="settings-identity">${avatar(me(),36)}<span><b>${esc(me().display_name)}</b><small>${esc(me().username)}</small></span></div><button class="settings-search" data-action="settings-search">${icon('search',18)} Search settings</button>
@@ -256,6 +259,7 @@ function preferenceSettings(section){
 }
 function securitySettings(){return `<div class="settings-page-title">Security & Access</div><div class="settings-section"><h2>Agent Permissions</h2><p class="muted-paragraph">Only workspace admins can pair, configure, or disconnect agents. Agent messages never trigger other agents. Codex and Hermes ACP tool requests appear here for approval; Claude Code uses its configured native permissions. A bridge can only claim jobs for its paired identity.</p>${connections.approvals(data().approvals||[])}<button class="button-secondary" data-action="show-sessions">Manage My Sessions</button></div><div class="settings-section"><h2>Connected Devices</h2>${connections.cards()}</div>`;}
 function settingsContent(){const page=preferenceSettings(state.selectedSettings);if(page)return page;switch(state.selectedSettings){
+  case 'roles':return access.page();
   case 'operator':return `<div class="settings-page-title">Cord Operator</div><div class="settings-section"><h2>Bring your own LLM</h2><p class="muted-paragraph">Connect OpenAI, Claude, OpenRouter, Groq, Gemini or an OpenAI-compatible model. The Operator can read public team context and propose workspace changes, but every mutation needs your approval.</p><button class="button-primary" data-action="open-operator">Open Cord Operator</button></div>`;
   case 'agents':return `<div class="settings-page-title">Connected Agents</div><div class="settings-section"><p class="muted-paragraph">Your local agents, connected to the team with one prompt.</p>${connections.cards()}${admin()?'<button class="button-primary" data-action="connect-agent">Connect Agent</button>':''}</div>`;
  case 'runs':return `<div class="settings-page-title">Agent Runs & Approvals</div>${connections.approvals(data().approvals||[])}${connections.runs(data().runs||[])}`;
@@ -318,14 +322,14 @@ function contextBody(){const menu=state.menu;if(!menu)return '';const {kind,id}=
     const c=channel(id);if(!c)return '';
     return `${menuItem('Mark As Read','mark-read',{ico:'check',id,type:'channel'})}${menuItem('Create Thread','create-thread',{ico:'threads',id,extra:`data-channel="${id}"`})}${menuItem('Browse Threads','browse-threads',{ico:'message-square',id})}${menuDivider()}
       ${menuItem(prefs('channel',id).muted?'Unmute Channel':'Mute Channel','toggle-mute',{ico:'bell-off',id,type:'channel'})}${menuItem('Notification Settings','notifications',{ico:'bell',id,type:'channel'})}${menuItem('Invite Agent','open-agent-directory',{ico:'bot'})}${menuDivider()}
-      ${menuItem('Edit Channel','channel-settings',{ico:'edit',id,disabled:!admin()})}${menuItem('Copy Link','copy-link',{ico:'link',id,type:'channel'})}${menuItem('Delete Channel','delete-channel',{ico:'trash',id,danger:true,disabled:!admin()})}${menuDivider()}${menuItem('Copy Channel ID','copy-id',{ico:'copy',id})}`;
+      ${admin()?menuItem('Permissions','access-open',{ico:'shield',id,type:'channel'}):''}${menuItem('Edit Channel','channel-settings',{ico:'edit',id,disabled:!admin()})}${menuItem('Copy Link','copy-link',{ico:'link',id,type:'channel'})}${menuItem('Delete Channel','delete-channel',{ico:'trash',id,danger:true,disabled:!admin()})}${menuDivider()}${menuItem('Copy Channel ID','copy-id',{ico:'copy',id})}`;
   }
   if(kind==='category'){
     const c=category(id);if(!c)return '';
     return `${menuItem('Mark As Read','mark-read',{ico:'check',id,type:'category'})}${menuDivider()}${menuItem('Collapse Category','toggle-category',{ico:'chevron',id})}${menuItem('Collapse All Categories','collapse-all',{ico:'chevrons-left'})}${menuDivider()}
       ${menuItem(prefs('category',id).muted?'Unmute Category':'Mute Category','toggle-mute',{ico:'bell-off',id,type:'category'})}${menuItem('Notification Settings','notifications',{ico:'bell',id,type:'category'})}${menuDivider()}
       ${menuItem('Move to Top','move-category',{ico:'sort',id,extra:'data-direction="top"',disabled:!admin()})}${menuItem('Move to Bottom','move-category',{ico:'sort',id,extra:'data-direction="bottom"',disabled:!admin()})}${menuDivider()}
-      ${menuItem('Edit Category','edit-category',{ico:'edit',id,disabled:!admin()})}${menuItem('Delete Category','delete-category',{ico:'trash',id,danger:true,disabled:!admin()})}${menuDivider()}${menuItem('Copy Category ID','copy-id',{ico:'copy',id})}`;
+      ${admin()?menuItem('Permissions','access-open',{ico:'shield',id,type:'category'}):''}${menuItem('Edit Category','edit-category',{ico:'edit',id,disabled:!admin()})}${menuItem('Delete Category','delete-category',{ico:'trash',id,danger:true,disabled:!admin()})}${menuDivider()}${menuItem('Copy Category ID','copy-id',{ico:'copy',id})}`;
   }
   if(kind==='sidebar'||kind==='workspace'){
     return `${menuItem(state.hideMuted?'Show Muted Channels':'Hide Muted Channels','hide-muted',{ico:'eye-off',checked:state.hideMuted})}${menuDivider()}
@@ -348,7 +352,7 @@ function searchView(){if(!state.searchOpen)return '';
 function captureModalForm(){const form=document.querySelector('#overlays form[data-form]');if(!form||state.busy)return null;return {kind:form.dataset.form,fields:[...form.elements].filter(el=>el.name).map(el=>({name:el.name,type:el.type,value:el.value,checked:el.checked})),focus:document.activeElement?.name,start:document.activeElement?.selectionStart,end:document.activeElement?.selectionEnd};}
 function renderOverlays(saved=captureModalForm()){const host=document.getElementById('overlays');if(!host)return;
  host.innerHTML=`${state.menu?`<div class="context-shade" data-action="close-menu"></div><div class="context-menu" style="left:${Math.max(4,Math.min(window.innerWidth-240,state.menu.x))}px;top:${Math.max(4,Math.min(window.innerHeight-490,state.menu.y))}px">${contextBody()}</div>`:''}
- ${notificationCenter.panel()}${state.profile?profileBody():''}${state.modal?modalBody():''}${searchView()}${data().approvals?.length&&!state.modal?`<button class="approval-inbox" data-action="open-run-log">${icon('shield-check',18)} ${data().approvals.length} agent approval${data().approvals.length>1?'s':''} pending</button>`:''}${state.toast?`<div class="toast ${state.toast.kind}">${icon(state.toast.kind==='error'?'info':'check',17)}<span>${esc(state.toast.message)}</span><button data-action="dismiss-toast" title="Dismiss">${icon('close',16)}</button></div>`:''}`;
+ ${notificationCenter.panel()}${access.overlay()}${state.profile?profileBody():''}${state.modal?modalBody():''}${searchView()}${data().approvals?.length&&!state.modal?`<button class="approval-inbox" data-action="open-run-log">${icon('shield-check',18)} ${data().approvals.length} agent approval${data().approvals.length>1?'s':''} pending</button>`:''}${state.toast?`<div class="toast ${state.toast.kind}">${icon(state.toast.kind==='error'?'info':'check',17)}<span>${esc(state.toast.message)}</span><button data-action="dismiss-toast" title="Dismiss">${icon('close',16)}</button></div>`:''}`;
  const form=host.querySelector('form[data-form]');if(saved&&form?.dataset.form===saved.kind){for(const value of saved.fields){for(const el of form.elements){if(el.name!==value.name)continue;if(el.type==='radio'){if(el.value===value.value)el.checked=value.checked;}else if(el.type==='checkbox')el.checked=value.checked;else el.value=value.value;}}const focus=[...form.elements].find(el=>el.name===saved.focus);focus?.focus();if(saved.start!=null&&['text','password','textarea'].includes(focus?.type))focus.setSelectionRange(saved.start,saved.end);}
 }
 function render({keepScroll=false}={}){
@@ -380,6 +384,8 @@ async function doAction(button,event){const action=button.dataset.action,id=butt
     const handledNotification=await notificationCenter.handleAction(action,button,event);
     if(handledNotification==='settings'){openSettings('notifications');return}
     if(handledNotification)return;
+    if(action==='access-open')state.menu=null;
+    if(await access.handle(action,button))return;
     if(await discord.handleAction(action,button,event))return;
     switch(action){
   case 'close-menu':state.menu=null;renderOverlays();break;
@@ -468,7 +474,7 @@ async function doAction(button,event){const action=button.dataset.action,id=butt
   case 'edit-profile':openModal('edit-profile');break;
   case 'open-settings':openSettings();break;
   case 'exit-settings':exitSettings();break;
-  case 'settings-section':state.selectedSettings=button.dataset.section;render();break;
+  case 'settings-section':state.selectedSettings=button.dataset.section;render();if(state.selectedSettings==='roles')void access.load();break;
   case 'settings-search':openSearch();break;
   case 'show-friends':openModal('new-dm');break;
   case 'show-help':guidance.openHelp();break;
@@ -503,7 +509,7 @@ async function doAction(button,event){const action=button.dataset.action,id=butt
  }}catch(err){handleError(err)}
 }
 function formValues(form){const values=Object.fromEntries(new FormData(form).entries());for(const check of form.querySelectorAll('input[type=checkbox]'))values[check.name]=check.checked;return values}
-async function submitForm(form,event){event.preventDefault();const kind=form.dataset.form;const values=formValues(form);if(state.busy)return;state.busy=true;const button=form.querySelector('button[type=submit]');if(button)button.disabled=true;
+async function submitForm(form,event){event.preventDefault();if(await access.submit(form))return;const kind=form.dataset.form;const values=formValues(form);if(state.busy)return;state.busy=true;const button=form.querySelector('button[type=submit]');if(button)button.disabled=true;
  try{
   if(kind==='easy-connect'){
     const r=await api('/agent-connections',{method:'POST',body:{...values,workspaceId:data().workspace.id}});state.modal={kind:'easy-connect',...r};await loadData({keepScroll:true});
@@ -562,6 +568,7 @@ document.addEventListener('contextmenu',event=>{
 document.addEventListener('click',event=>{
  const target=event.target.closest('[data-action]');if(!target){if(state.menu||state.profile){state.menu=null;state.profile=null;renderOverlays()}return}
  if(target.dataset.action==='dismiss-modal'&&event.target.closest('[data-stop-click]')&&target===event.target.closest('.modal-scrim'))return;
+ if(target.dataset.action==='access-close'&&event.target.closest('.access-dialog')&&target===event.target.closest('.access-backdrop'))return;
  event.preventDefault();void doAction(target,event);
 });
 document.addEventListener('submit',event=>{const form=event.target.closest('[data-form]');if(form)void submitForm(form,event)});

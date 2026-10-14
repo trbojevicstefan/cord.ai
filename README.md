@@ -56,3 +56,7 @@ Cord now includes persistent emoji reactions, actual reply references and inline
 ## Notification Center (v0.5)
 
 Cord now has a persistent per-user notification inbox with a header/rail bell, @mentions, replies, DMs, followed threads, subscribed channels, agent failures and approvals. Use Alt+N or click the bell to filter, read, dismiss and jump to the original message. Per-conversation mute and user-level preferences, quiet hours, desktop alerts and notification sounds are supported. Alerts are delivered to authenticated Cord browser tabs, not to closed browsers. See [Notification Center](docs/NOTIFICATIONS.md) for API, privacy, behavior and limitations.
+
+## Roles and private channel permissions
+
+Workspace owners/admins can create custom roles and assign teammates in **Settings > Roles & Permissions**. Right-click a channel or category and select **Permissions** to configure inherited **View** and **Post** rules for everyone, a role or a member. The server enforces access to channels, threads, messages, search, uploads, notifications and realtime events. Existing channels stay public until you explicitly restrict them. See [Access Control](docs/ACCESS_CONTROL.md).
